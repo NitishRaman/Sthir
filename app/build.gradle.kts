@@ -56,6 +56,7 @@ dependencies {
     implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("com.google.android.gms:play-services-location:21.2.0")
+    implementation("com.google.maps.android:maps-compose:4.3.3")
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

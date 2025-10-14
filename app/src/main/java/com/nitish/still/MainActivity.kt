@@ -118,8 +118,9 @@ fun LocationAwareScreen() {
     if (isLocationSet) {
         HomeScreen()
     } else {
-        LocationPermissionScreen {
-            isLocationSet = true
+        LocationPermissionScreen { 
+             val intent = Intent(context, MapActivity::class.java)
+             context.startActivity(intent)
         }
     }
 }
@@ -127,7 +128,6 @@ fun LocationAwareScreen() {
 @Composable
 fun LocationPermissionScreen(onPermissionGranted: () -> Unit) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
     val launcher = rememberLauncherForActivityResult(
@@ -135,17 +135,7 @@ fun LocationPermissionScreen(onPermissionGranted: () -> Unit) {
         onResult = { isGranted ->
             if (isGranted) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                        if (location != null) {
-                            prefs.edit()
-                                .putFloat("home_latitude", location.latitude.toFloat())
-                                .putFloat("home_longitude", location.longitude.toFloat())
-                                .apply()
-                            onPermissionGranted()
-                        } else {
-                            Log.d("Location", "Location is null")
-                        }
-                    }
+                   onPermissionGranted()
                 }
             }
         }
