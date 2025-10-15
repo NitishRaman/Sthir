@@ -1,14 +1,11 @@
 package com.nitish.still
 
 import android.Manifest
-import android.content.ComponentName
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.os.IBinder
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -22,23 +19,28 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,14 +51,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.google.android.gms.location.LocationServices
 import com.nitish.still.ui.theme.StillTheme
 import kotlinx.coroutines.delay
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.statusBarsPadding
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The problematic enableEdgeToEdge() call has been permanently removed.
         setContent {
             StillTheme {
                 MainNavigation()
@@ -65,204 +68,181 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// --- Main Navigation --- //
+
 @Composable
 fun MainNavigation() {
     var showSplashScreen by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
+    var onboardingComplete by remember { mutableStateOf(prefs.getBoolean("onboarding_complete", false)) }
 
     if (showSplashScreen) {
         SplashScreen(onTimeout = { showSplashScreen = false })
     } else {
-        LocationAwareScreen()
+        if (onboardingComplete) {
+            HomeScreenWithNavigation()
+        } else {
+            OnboardingFlow(onOnboardingFinished = {
+                prefs.edit().putBoolean("onboarding_complete", true).apply()
+                onboardingComplete = true
+            })
+        }
     }
 }
 
 @Composable
 fun SplashScreen(onTimeout: () -> Unit) {
     LaunchedEffect(Unit) {
-        delay(2000L) // Show splash for 2 seconds
+        delay(2000L)
         onTimeout()
     }
-
-    Surface(modifier = Modifier.fillMaxSize()) { // Background color is now handled by the theme
+    Surface(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.logo),
-                contentDescription = "Still Logo",
-                modifier = Modifier.size(200.dp), // Use a large, fixed size for the logo
-                contentScale = ContentScale.Fit
-            )
+            Image(painter = painterResource(id = R.drawable.logo), contentDescription = "Still Logo", modifier = Modifier.size(200.dp), contentScale = ContentScale.Fit)
             Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                text = "STILL",
-                style = MaterialTheme.typography.displayLarge // Increased the font size
-            )
-            Spacer(modifier = Modifier.height(12.dp)) // Added space between title and tagline
-            Text(
-                text = "SHUT EYES. SEE WITHIN.",
-                style = MaterialTheme.typography.bodyLarge
-            )
+            Text(text = "STILL", style = MaterialTheme.typography.displayLarge)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(text = "SHUT EYES. SEE WITHIN.", style = MaterialTheme.typography.bodyLarge)
         }
     }
 }
 
+// --- Onboarding --- //
+
 @Composable
-fun LocationAwareScreen() {
+fun OnboardingFlow(onOnboardingFinished: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
-    var isLocationSet by remember { mutableStateOf(prefs.contains("home_latitude")) }
+    var onboardingStep by remember { mutableStateOf(prefs.getInt("onboarding_step", 0)) }
 
-    if (isLocationSet) {
-        HomeScreen()
-    } else {
-        LocationPermissionScreen { 
-             val intent = Intent(context, MapActivity::class.java)
-             context.startActivity(intent)
-        }
+    fun updateStep(step: Int) {
+        prefs.edit().putInt("onboarding_step", step).apply()
+        onboardingStep = step
+    }
+
+    when (onboardingStep) {
+        0 -> LocationPermissionScreen { updateStep(1) }
+        1 -> SettingsScreenWrapper { onOnboardingFinished() } // Last step
     }
 }
 
 @Composable
-fun LocationPermissionScreen(onPermissionGranted: () -> Unit) {
+fun LocationPermissionScreen(onFinished: () -> Unit) {
     val context = LocalContext.current
-    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val mapLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) onFinished()
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) mapLauncher.launch(Intent(context, MapActivity::class.java))
+    }
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
 
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            if (isGranted) {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                   onPermissionGranted()
-                }
-            }
-        }
-    )
-
-    Scaffold {
+    Scaffold { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(it).padding(16.dp),
+            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            Text(text = "Welcome to Still.", style = MaterialTheme.typography.displaySmall, textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(text = "Let’s start by setting your home location.", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Welcome to Still.",
-                style = MaterialTheme.typography.headlineMedium,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = "This app works best by knowing your home location to track your activity.",
+                text = "Still uses it to track your screen activity only when you’re at home, ensuring it stays inactive when you’re out or need your phone.",
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+                modifier = Modifier.padding(bottom = 32.dp)
             )
-            Button(onClick = { launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }) {
+            Button(onClick = { 
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                } else {
+                    permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                }
+            }) {
                 Text("Set Home Location")
             }
         }
     }
 }
 
+@Composable
+fun SettingsScreenWrapper(onFinished: () -> Unit) {
+    val context = LocalContext.current
+    val settingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { onFinished() }
+    LaunchedEffect(Unit) {
+        settingsLauncher.launch(Intent(context, SettingsActivity::class.java))
+    }
+}
+
+// --- Main App --- //
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen() {
+fun HomeScreenWithNavigation() {
     val context = LocalContext.current
-    var timerService by remember { mutableStateOf<TimerService?>(null) }
-    var isSessionActive by remember { mutableStateOf(false) }
-
-    val connection = remember {
-        object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                timerService = (service as TimerService.LocalBinder).getService()
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                timerService = null
-            }
-        }
-    }
-
-    // Automatically bind/unbind from the service based on session state
-    LaunchedEffect(isSessionActive) {
-        val intent = Intent(context, TimerService::class.java)
-        if (isSessionActive) {
-            ContextCompat.startForegroundService(context, intent)
-            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
-        } else {
-            if (timerService != null) {
-                context.unbindService(connection)
-            }
-            context.stopService(intent)
-            timerService = null
-        }
-    }
-
-    // Clean up the connection when the screen is disposed
-    DisposableEffect(Unit) {
-        onDispose {
-            if (timerService != null) {
-                context.unbindService(connection)
-            }
-        }
-    }
-
-    val usageState by timerService?.usageState?.collectAsState(initial = UsageState()) ?: remember { mutableStateOf(UsageState()) }
-
-    val formattedTime = remember(usageState.continuousUsageMs) {
-        val hours = TimeUnit.MILLISECONDS.toHours(usageState.continuousUsageMs)
-        val minutes = TimeUnit.MILLISECONDS.toMinutes(usageState.continuousUsageMs) % 60
-        val seconds = TimeUnit.MILLISECONDS.toSeconds(usageState.continuousUsageMs) % 60
-        String.format("%02d:%02d:%02d", hours, minutes, seconds)
-    }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
     Scaffold(
+        modifier = Modifier.statusBarsPadding(),
         topBar = {
             CenterAlignedTopAppBar(
+                modifier = Modifier.statusBarsPadding(),
                 title = { Text("Still") },
-                actions = {
-                    IconButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Default.Menu, "Menu")
                     }
-                }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+                )
             )
         }
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(it),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                ModalDrawerSheet {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    NavigationDrawerItem(label = { Text("Set Home Location") }, selected = false, onClick = {
+                        context.startActivity(Intent(context, MapActivity::class.java))
+                        scope.launch { drawerState.close() }
+                    })
+                    NavigationDrawerItem(label = { Text("Settings") }, selected = false, onClick = {
+                        context.startActivity(Intent(context, SettingsActivity::class.java))
+                        scope.launch { drawerState.close() }
+                    })
+                }
+            }
         ) {
-            Text(formattedTime, style = MaterialTheme.typography.displayLarge)
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = { isSessionActive = !isSessionActive }) {
-                Text(if (isSessionActive) "Stop Session" else "Start Session")
+            Column(
+                modifier = Modifier.fillMaxSize().padding(it),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("Welcome Home!", style = MaterialTheme.typography.displayLarge)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Your session will start automatically.", style = MaterialTheme.typography.bodyLarge)
             }
         }
     }
 }
 
-@Preview(showBackground = true, name = "Splash Screen Preview")
-@Composable
-fun SplashScreenPreview() {
-    StillTheme {
-        SplashScreen(onTimeout = {})
-    }
-}
-
-@Preview(showBackground = true, name = "Location Permission Preview")
-@Composable
-fun LocationPermissionScreenPreview() {
-    StillTheme {
-        LocationPermissionScreen {}
-    }
-}
-
-@Preview(showBackground = true, name = "Home Screen Preview")
+@Preview(showBackground = true)
 @Composable
 fun HomeScreenPreview() {
     StillTheme {
-        HomeScreen()
+        HomeScreenWithNavigation()
     }
 }

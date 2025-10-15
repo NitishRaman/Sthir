@@ -17,19 +17,31 @@ val TextFont = FontFamily(
     Font(R.font.text, FontWeight.Normal)
 )
 
-// Set up the Typography object
+// Set up the Typography object with larger sizes
 val AppTypography = Typography(
     // Headings
     displayLarge = TextStyle(
         fontFamily = HeadingFont,
         fontWeight = FontWeight.Bold,
-        fontSize = 57.sp,
+        fontSize = 60.sp, // Increased
+        color = BrandTextPrimary
+    ),
+    displaySmall = TextStyle(
+        fontFamily = HeadingFont,
+        fontWeight = FontWeight.Bold,
+        fontSize = 36.sp, // Increased
         color = BrandTextPrimary
     ),
     headlineMedium = TextStyle(
         fontFamily = HeadingFont,
         fontWeight = FontWeight.Bold,
-        fontSize = 32.sp,
+        fontSize = 32.sp, // Increased
+        color = BrandTextPrimary
+    ),
+    headlineSmall = TextStyle(
+        fontFamily = HeadingFont,
+        fontWeight = FontWeight.Bold,
+        fontSize = 24.sp, // Increased
         color = BrandTextPrimary
     ),
 
@@ -37,13 +49,13 @@ val AppTypography = Typography(
     bodyLarge = TextStyle(
         fontFamily = TextFont,
         fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
+        fontSize = 18.sp, // Increased
         color = BrandTextSecondary
     ),
     // Default for Buttons
     labelLarge = TextStyle(
         fontFamily = TextFont,
         fontWeight = FontWeight.Normal,
-        fontSize = 14.sp
+        fontSize = 16.sp // Increased
     )
 )

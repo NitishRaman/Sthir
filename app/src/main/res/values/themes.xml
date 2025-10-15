@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
+    <!-- This is the base theme. By setting the parent to a simple NoActionBar theme,
+         we ensure a stable layout where the app draws below the status bar. -->
     <style name="Theme.Still" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>
