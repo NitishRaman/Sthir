@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -244,7 +243,9 @@ private fun addGeofence(context: Context, geofencingClient: GeofencingClient, lo
         .addGeofence(geofence)
         .build()
 
-    val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
+    val intent = Intent(context, GeofenceBroadcastReceiver::class.java).apply {
+        `package` = context.packageName
+    }
     val pendingIntent = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
 
     geofencingClient.addGeofences(geofencingRequest, pendingIntent)?.run {

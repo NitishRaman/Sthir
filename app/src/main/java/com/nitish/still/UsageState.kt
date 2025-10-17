@@ -1,5 +1,3 @@
 package com.nitish.still
 
-data class UsageState(
-    val continuousUsageMs: Long = 0
-)
+data class UsageState(val continuousUsageMs: Long)

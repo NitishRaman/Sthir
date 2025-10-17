@@ -10,9 +10,13 @@ import com.google.android.gms.location.GeofencingEvent
 class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        Log.e(TAG, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        Log.e(TAG, "!!! GEOFENCE BROADCAST RECEIVED !!!")
+        Log.e(TAG, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
         val geofencingEvent = GeofencingEvent.fromIntent(intent)
         if (geofencingEvent == null) {
-            Log.e(TAG, "GeofencingEvent is null")
+            Log.e(TAG, "GeofencingEvent is null, cannot process.")
             return
         }
 
@@ -22,38 +26,31 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
 
         val geofenceTransition = geofencingEvent.geofenceTransition
-        val prefs = context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE)
+        Log.i(TAG, "Geofence transition type: $geofenceTransition")
+
+        val app = context.applicationContext as StillApplication
 
         if (geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER) {
-            Log.i(TAG, "User has entered the home geofence.")
-            prefs.edit().putBoolean(KEY_IS_INSIDE_HOME, true).apply()
-            sendGeofenceUpdate(context, true)
+            Log.i(TAG, "Transition is ENTER. Setting isInsideHome to TRUE.")
+            app.updateInsideHomeStatus(true)
 
             val serviceIntent = Intent(context, TimerService::class.java)
             context.startForegroundService(serviceIntent)
+            Log.i(TAG, "Started TimerService.")
 
         } else if (geofenceTransition == Geofence.GEOFENCE_TRANSITION_EXIT) {
-            Log.i(TAG, "User has exited the home geofence.")
-            prefs.edit().putBoolean(KEY_IS_INSIDE_HOME, false).apply()
-            sendGeofenceUpdate(context, false)
+            Log.i(TAG, "Transition is EXIT. Setting isInsideHome to FALSE.")
+            app.updateInsideHomeStatus(false)
 
             val serviceIntent = Intent(context, TimerService::class.java)
             context.stopService(serviceIntent)
+            Log.i(TAG, "Stopped TimerService.")
         }
-    }
-
-    private fun sendGeofenceUpdate(context: Context, isInsideHome: Boolean) {
-        val intent = Intent(ACTION_GEOFENCE_UPDATE).apply {
-            putExtra(EXTRA_IS_INSIDE_HOME, isInsideHome)
-            `package` = context.packageName
-        }
-        context.sendBroadcast(intent)
     }
 
     companion object {
         private const val TAG = "GeofenceReceiver"
-        const val ACTION_GEOFENCE_UPDATE = "com.nitish.still.ACTION_GEOFENCE_UPDATE"
-        const val EXTRA_IS_INSIDE_HOME = "is_inside_home"
+        const val ACTION_GEOFENCE_EVENT = "com.nitish.still.ACTION_GEOFENCE_EVENT"
         const val KEY_IS_INSIDE_HOME = "is_inside_home"
     }
 }
