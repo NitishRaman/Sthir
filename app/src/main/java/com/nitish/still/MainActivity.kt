@@ -138,7 +138,7 @@ fun OnboardingFlow(onOnboardingFinished: () -> Unit) {
 
     when (onboardingStep) {
         0 -> LocationPermissionScreen { updateStep(1) }
-        1 -> SettingsScreenWrapper { onOnboardingFinished() } // Last step
+        1 -> SettingsScreenWrapper(onFinished = onOnboardingFinished, isOnboarding = true)
     }
 }
 
@@ -228,11 +228,18 @@ fun LocationPermissionScreen(onFinished: () -> Unit) {
 
 
 @Composable
-fun SettingsScreenWrapper(onFinished: () -> Unit) {
+fun SettingsScreenWrapper(onFinished: () -> Unit, isOnboarding: Boolean) {
     val context = LocalContext.current
-    val settingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { onFinished() }
+    val settingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (it.resultCode == Activity.RESULT_OK && isOnboarding) {
+            onFinished()
+        }
+    }
     LaunchedEffect(Unit) {
-        settingsLauncher.launch(Intent(context, SettingsActivity::class.java))
+        val intent = Intent(context, SettingsActivity::class.java).apply {
+            putExtra("is_onboarding", isOnboarding)
+        }
+        settingsLauncher.launch(intent)
     }
 }
 
@@ -304,12 +311,14 @@ fun HomeScreenWithNavigation() {
                         scope.launch { drawerState.close() }
                     })
                 }
-            }
+            },
         ) {
-            if (isInsideHome) {
-                InsideZoneScreen(modifier = Modifier.padding(paddingValues))
-            } else {
-                OutsideZoneScreen(modifier = Modifier.padding(paddingValues))
+            Column(modifier = Modifier.padding(paddingValues)) {
+                if (isInsideHome) {
+                    InsideZoneScreen()
+                } else {
+                    OutsideZoneScreen()
+                }
             }
         }
     }
@@ -411,6 +420,12 @@ private fun setupGeofence(context: Context) {
     }
 
     val geofencingClient = LocationServices.getGeofencingClient(context)
+    val geofencePendingIntent = PendingIntent.getBroadcast(
+        context,
+        0,
+        Intent(context, GeofenceBroadcastReceiver::class.java),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+    )
 
     val geofence = Geofence.Builder()
         .setRequestId("HOME_GEOFENCE")
@@ -424,19 +439,35 @@ private fun setupGeofence(context: Context) {
         .addGeofence(geofence)
         .build()
 
-    val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
-    val pendingIntent = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-
-    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-        Log.e("Geofence", "Fine location permission not granted, cannot add geofence.")
-        return
-    }
-    geofencingClient.addGeofences(geofencingRequest, pendingIntent)?.run {
+    geofencingClient.removeGeofences(geofencePendingIntent)?.run {
         addOnSuccessListener {
-            Log.i("Geofence", "Geofence added successfully.")
+            Log.i("Geofence", "Old geofence removed successfully.")
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                return@addOnSuccessListener
+            }
+            geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent).run {
+                addOnSuccessListener {
+                    Log.i("Geofence", "New geofence added successfully.")
+                }
+                addOnFailureListener { e ->
+                    Log.e("Geofence", "Failed to add new geofence: ${e.message}")
+                }
+            }
         }
-        addOnFailureListener {
-            Log.e("Geofence", "Failed to add geofence: ${it.message}")
+        addOnFailureListener { e ->
+            Log.e("Geofence", "Failed to remove old geofence: ${e.message}")
+            // Even if removal fails, try to add the new one
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                return@addOnFailureListener
+            }
+            geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent).run {
+                addOnSuccessListener {
+                    Log.i("Geofence", "Geofence added successfully (old one may not have been removed).")
+                }
+                addOnFailureListener { e2 ->
+                    Log.e("Geofence", "Failed to add geofence: ${e2.message}")
+                }
+            }
         }
     }
 }
@@ -465,4 +496,3 @@ fun InsideZoneScreenPreview() {
         InsideZoneScreen(modifier = Modifier)
     }
 }
-

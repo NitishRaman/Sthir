@@ -23,7 +23,7 @@ android {
 
     defaultConfig {
         applicationId = "com.nitish.still"
-        minSdk = 21
+        minSdk = 28
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

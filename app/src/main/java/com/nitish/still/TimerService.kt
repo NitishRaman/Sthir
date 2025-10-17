@@ -68,7 +68,6 @@ class TimerService : Service() {
 
     private fun trackUsage() {
         serviceScope.launch {
-            val exemptApps = prefs.getStringSet("exempt_apps", emptySet()) ?: emptySet()
             val workIntervalMillis = TimeUnit.MINUTES.toMillis(prefs.getInt("work_interval", 60).toLong())
 
             while (true) {
@@ -85,12 +84,18 @@ class TimerService : Service() {
                             foregroundApp = event.packageName
                         }
                     }
-                    if (foregroundApp != null && foregroundApp != packageName && !exemptApps.contains(foregroundApp)) {
-                        continuousUsageMs += 1000
-                        Log.d("TimerService", "Foreground app: $foregroundApp, Usage: $continuousUsageMs")
 
-                        if (continuousUsageMs >= workIntervalMillis) {
-                            Log.d("TimerService", "Work interval reached!")
+                    if (foregroundApp != null && foregroundApp != packageName) {
+                        val appLabel = prefs.getString("app_label_$foregroundApp", LABEL_UNLABELED)
+                        if (appLabel != LABEL_IMPORTANT) {
+                            continuousUsageMs += 1000
+                            Log.d("TimerService", "Foreground app: $foregroundApp, Usage: $continuousUsageMs")
+
+                            if (continuousUsageMs >= workIntervalMillis) {
+                                Log.d("TimerService", "Work interval reached!")
+                                continuousUsageMs = 0
+                            }
+                        } else {
                             continuousUsageMs = 0
                         }
                     } else {
