@@ -27,10 +27,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
@@ -117,13 +119,36 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
     var customActivity by remember { mutableStateOf(prefs.getInt("work_interval", 45).toString()) }
     var customBreak by remember { mutableStateOf((prefs.getInt("break_interval", 300) / 60).toString()) }
 
+    var selectedDayIndex by remember { mutableStateOf(6) } // 0-6, where 6 is today
+    var refreshTrigger by remember { mutableStateOf(0) } // Used to refresh the app list
+
     val dailyUsage = remember(hasPermission) {
         if (hasPermission) getDailyUsage(context) else emptyList()
     }
-    val appUsage = remember(hasPermission) {
-        if (hasPermission) getAppUsage(context) else emptyList()
+
+    // This list is now filtered to show only Leisure apps
+    val leisureAppUsage = remember(hasPermission, selectedDayIndex, refreshTrigger) {
+        if (hasPermission) {
+            val cal = Calendar.getInstance().apply {
+                add(Calendar.DAY_OF_YEAR, selectedDayIndex - 6)
+            }
+            val allApps = getAppUsageForDay(context, cal)
+            allApps.filter {
+                val prefKey = "app_label_${it.appInfo.packageName}"
+                val defaultLabel = inferLabel(it.appInfo)
+                val label = prefs.getString(prefKey, defaultLabel) ?: defaultLabel
+                label == LABEL_LEISURE
+            }
+        } else {
+            emptyList()
+        }
     }
-    val totalTodayUsage = dailyUsage.find { it.day == "Today" }?.usageMillis ?: 0L
+    
+    val totalUsageForSelectedDay = if(selectedDayIndex == 6) {
+        dailyUsage.find { it.day == "Today" }?.usageMillis ?: 0L
+    } else {
+        dailyUsage.getOrNull(selectedDayIndex)?.usageMillis ?: 0L
+    }
 
     fun selectPreset(preset: TimerPreset) {
         selectedPresetName = preset.name
@@ -136,7 +161,8 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
         }
     }
 
-    Scaffold(modifier = modifier.fillMaxSize(),
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("App activity details") },
@@ -184,7 +210,7 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         TextField(
                             value = customActivity,
-                            onValueChange = { 
+                            onValueChange = {
                                 customActivity = it
                                 prefs.edit().putInt("work_interval", it.toIntOrNull() ?: 45).apply()
                             },
@@ -194,7 +220,7 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
                         Spacer(modifier = Modifier.height(16.dp))
                         TextField(
                             value = customBreak,
-                            onValueChange = { 
+                            onValueChange = {
                                 customBreak = it
                                 prefs.edit().putInt("break_interval", (it.toIntOrNull() ?: 5) * 60).apply()
                             },
@@ -204,7 +230,7 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
                     }
                 }
             }
-            
+
             item { Divider(modifier = Modifier.padding(vertical = 16.dp)) }
 
             // --- App Activity Details ---
@@ -212,20 +238,34 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
                 Text("Screen time", style = MaterialTheme.typography.titleLarge)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = formatUsageTime(totalTodayUsage, detail = true),
+                    text = formatUsageTime(totalUsageForSelectedDay, detail = true),
                     style = MaterialTheme.typography.headlineLarge
                 )
-                Text("Today", style = MaterialTheme.typography.bodyMedium)
+                val selectedDayText = when (val day = dailyUsage.getOrNull(selectedDayIndex)?.day) {
+                    null -> ""
+                    "Today" -> "Today"
+                    else -> {
+                        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, selectedDayIndex - 6) }
+                        SimpleDateFormat("E, d MMM", Locale.getDefault()).format(cal.time)
+                    }
+                }
+                Text(selectedDayText, style = MaterialTheme.typography.bodyMedium)
                 Spacer(modifier = Modifier.height(24.dp))
                 if (dailyUsage.isNotEmpty()) {
-                    BarChart(dailyUsage)
+                    BarChart(dailyUsage, selectedDayIndex) { index ->
+                        selectedDayIndex = index
+                    }
                 }
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
-            // --- App Usage List ---
-            items(appUsage) { app ->
-                AppUsageRow(appUsageInfo = app, packageManager = context.packageManager)
+            // --- App Usage List (now filtered) ---
+            items(leisureAppUsage) { app ->
+                AppUsageRow(
+                    appUsageInfo = app, 
+                    packageManager = context.packageManager,
+                    onLabelChanged = { refreshTrigger++ } // This triggers the list to refresh
+                )
             }
 
             // --- Permission Card ---
@@ -274,7 +314,11 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
 }
 
 @Composable
-fun BarChart(dailyUsage: List<DailyUsage>) {
+fun BarChart(
+    dailyUsage: List<DailyUsage>,
+    selectedDayIndex: Int,
+    onDaySelected: (Int) -> Unit
+) {
     val maxUsage = dailyUsage.maxOfOrNull { it.usageMillis } ?: 1L
     Row(
         modifier = Modifier
@@ -283,15 +327,20 @@ fun BarChart(dailyUsage: List<DailyUsage>) {
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.Bottom
     ) {
-        dailyUsage.forEach {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        dailyUsage.forEachIndexed { index, dailyUsage ->
+            val isSelected = index == selectedDayIndex
+            val color = if (isSelected) MaterialTheme.colorScheme.primary else Color.LightGray
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onDaySelected(index) }
+            ) {
                 Box(
                     modifier = Modifier
                         .width(24.dp)
-                        .fillMaxHeight(it.usageMillis.toFloat() / maxUsage)
-                        .background(MaterialTheme.colorScheme.primary)
+                        .fillMaxHeight(dailyUsage.usageMillis.toFloat() / maxUsage)
+                        .background(color)
                 )
-                Text(it.day.take(3), style = MaterialTheme.typography.bodySmall)
+                Text(dailyUsage.day.take(3), style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -308,76 +357,102 @@ fun getDailyUsage(context: Context): List<DailyUsage> {
     calendar.set(Calendar.MILLISECOND, 0)
     val startTime = calendar.timeInMillis
 
-    val stats = usageStatsManager.queryUsageStats(
-        UsageStatsManager.INTERVAL_DAILY,
-        startTime,
-        endTime
-    )
+    val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
 
+    // Create a map of day -> usage
     val dailyTotals = mutableMapOf<Int, Long>()
     stats.forEach {
-        calendar.timeInMillis = it.firstTimeStamp
-        val dayOfYear = calendar.get(Calendar.DAY_OF_YEAR)
+        val cal = Calendar.getInstance().apply { timeInMillis = it.firstTimeStamp }
+        val dayOfYear = cal.get(Calendar.DAY_OF_YEAR)
         dailyTotals[dayOfYear] = (dailyTotals[dayOfYear] ?: 0L) + it.totalTimeInForeground
     }
-
+    
     val result = mutableListOf<DailyUsage>()
     val dayFormat = SimpleDateFormat("EEE", Locale.getDefault())
     val todayCalendar = Calendar.getInstance()
-    val todayDayOfYear = todayCalendar.get(Calendar.DAY_OF_YEAR)
 
-    calendar.timeInMillis = startTime
+    val cal = Calendar.getInstance().apply { timeInMillis = startTime }
 
     for (i in 0..6) {
-        val dayOfYear = calendar.get(Calendar.DAY_OF_YEAR)
+        val dayOfYear = cal.get(Calendar.DAY_OF_YEAR)
         val usage = dailyTotals[dayOfYear] ?: 0L
-
-        val dayLabel = if (calendar.get(Calendar.YEAR) == todayCalendar.get(Calendar.YEAR) && dayOfYear == todayDayOfYear) {
+        val dayLabel = if (cal.get(Calendar.DAY_OF_YEAR) == todayCalendar.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == todayCalendar.get(Calendar.YEAR)) {
             "Today"
         } else {
-            dayFormat.format(calendar.time)
+            dayFormat.format(cal.time)
         }
         result.add(DailyUsage(dayLabel, usage))
-        calendar.add(Calendar.DAY_OF_YEAR, 1)
+        cal.add(Calendar.DAY_OF_YEAR, 1)
     }
     return result
 }
 
-fun getAppUsage(context: Context): List<AppUsageInfo> {
-    val pm = context.packageManager
-    val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-        addCategory(Intent.CATEGORY_LAUNCHER)
-    }
-
-    val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
-    val packageNames = resolveInfos.map { it.activityInfo.packageName }.toSet()
-
+fun getAppUsageForDay(context: Context, calendar: Calendar): List<AppUsageInfo> {
     val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-    val time = System.currentTimeMillis()
-    val usageStats = usageStatsManager.queryUsageStats(
-        UsageStatsManager.INTERVAL_WEEKLY,
-        time - TimeUnit.DAYS.toMillis(7),
-        time
-    )
-    val usageMap = usageStats.associateBy({ it.packageName }, { it.totalTimeInForeground })
+    val pm = context.packageManager
 
-    return packageNames.mapNotNull { pkg ->
-        try {
-            val appInfo = pm.getApplicationInfo(pkg, PackageManager.GET_META_DATA)
-            val usage = usageMap[pkg] ?: 0
-            if (usage > 0) {
-                AppUsageInfo(appInfo, usage)
-            } else {
+    // Set calendar to the start of the selected day
+    calendar.set(Calendar.HOUR_OF_DAY, 0)
+    calendar.set(Calendar.MINUTE, 0)
+    calendar.set(Calendar.SECOND, 0)
+    calendar.set(Calendar.MILLISECOND, 0)
+    val startTime = calendar.timeInMillis
+
+    // Set calendar to the end of the selected day
+    calendar.set(Calendar.HOUR_OF_DAY, 23)
+    calendar.set(Calendar.MINUTE, 59)
+    calendar.set(Calendar.SECOND, 59)
+    calendar.set(Calendar.MILLISECOND, 999)
+    val endTime = calendar.timeInMillis
+
+    // Query stats for the selected day
+    val usageStats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+
+    // Map stats to AppUsageInfo
+    return usageStats
+        .filter { it.totalTimeInForeground > 0 }
+        .mapNotNull {
+            try {
+                val appInfo = pm.getApplicationInfo(it.packageName, 0)
+                AppUsageInfo(appInfo, it.totalTimeInForeground)
+            } catch (e: PackageManager.NameNotFoundException) {
+                // System packages or uninstalled apps might be in stats
                 null
             }
-        } catch (e: PackageManager.NameNotFoundException) {
-            null
         }
-    }.sortedByDescending { it.usageTimeMillis }
+        .sortedByDescending { it.usageTimeMillis }
+}
+
+@SuppressLint("InlinedApi")
+fun inferLabel(appInfo: ApplicationInfo): String {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        return when (appInfo.category) {
+            ApplicationInfo.CATEGORY_GAME,
+            ApplicationInfo.CATEGORY_VIDEO,
+            ApplicationInfo.CATEGORY_SOCIAL,
+            ApplicationInfo.CATEGORY_IMAGE,
+            ApplicationInfo.CATEGORY_AUDIO -> LABEL_LEISURE
+            else -> LABEL_UNLABELED
+        }
+    }
+    return LABEL_UNLABELED
 }
 
 @Composable
-fun AppUsageRow(appUsageInfo: AppUsageInfo, packageManager: PackageManager) {
+fun AppUsageRow(
+    appUsageInfo: AppUsageInfo, 
+    packageManager: PackageManager,
+    onLabelChanged: () -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
+    val prefKey = "app_label_${appUsageInfo.appInfo.packageName}"
+
+    val defaultLabel = remember(appUsageInfo.appInfo) { inferLabel(appUsageInfo.appInfo) }
+    var currentLabel by remember { mutableStateOf(prefs.getString(prefKey, defaultLabel) ?: defaultLabel) }
+    var expanded by remember { mutableStateOf(false) }
+    val labels = listOf(LABEL_LEISURE, LABEL_IMPORTANT, LABEL_UNLABELED)
+
     val appIcon = remember(appUsageInfo.appInfo) {
         appUsageInfo.appInfo.loadIcon(packageManager)
     }
@@ -413,6 +488,32 @@ fun AppUsageRow(appUsageInfo: AppUsageInfo, packageManager: PackageManager) {
                 style = MaterialTheme.typography.bodySmall,
                 fontSize = 12.sp
             )
+        }
+        
+        Box(modifier = Modifier.wrapContentSize(Alignment.TopStart)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickable { expanded = true }
+            ) {
+                Text(currentLabel)
+                Icon(Icons.Default.ArrowDropDown, contentDescription = "Change app label")
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                labels.forEach { label ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = { 
+                            currentLabel = label
+                            prefs.edit().putString(prefKey, label).apply()
+                            expanded = false
+                            onLabelChanged() // This line triggers the refresh
+                        }
+                    )
+                }
+            }
         }
     }
 }
