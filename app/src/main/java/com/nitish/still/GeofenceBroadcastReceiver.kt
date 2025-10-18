@@ -34,7 +34,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             Log.i(TAG, "Transition is ENTER. Setting isInsideHome to TRUE.")
             app.updateInsideHomeStatus(true)
 
-            val serviceIntent = Intent(context, TimerService::class.java)
+            val serviceIntent = Intent(context, TimerService::class.java).apply {
+                putExtra(EXTRA_IS_INSIDE_HOME, true)
+            }
             context.startForegroundService(serviceIntent)
             Log.i(TAG, "Started TimerService.")
 
@@ -42,15 +44,18 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             Log.i(TAG, "Transition is EXIT. Setting isInsideHome to FALSE.")
             app.updateInsideHomeStatus(false)
 
-            val serviceIntent = Intent(context, TimerService::class.java)
-            context.stopService(serviceIntent)
-            Log.i(TAG, "Stopped TimerService.")
+            val serviceIntent = Intent(context, TimerService::class.java).apply {
+                putExtra(EXTRA_IS_INSIDE_HOME, false)
+            }
+            context.startForegroundService(serviceIntent) // Use startForegroundService to update the service state
+            Log.i(TAG, "Updated TimerService (stopping countdown).")
         }
     }
 
     companion object {
         private const val TAG = "GeofenceReceiver"
         const val ACTION_GEOFENCE_EVENT = "com.nitish.still.ACTION_GEOFENCE_EVENT"
+        const val EXTRA_IS_INSIDE_HOME = "is_inside_home"
         const val KEY_IS_INSIDE_HOME = "is_inside_home"
     }
 }

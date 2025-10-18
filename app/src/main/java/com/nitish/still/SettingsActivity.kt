@@ -11,7 +11,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -21,30 +20,33 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nitish.still.ui.theme.StillTheme
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.TimeUnit
 
 data class AppUsageInfo(
     val appInfo: ApplicationInfo,
     val usageTimeMillis: Long,
 )
+
+data class DailyUsage(val day: String, val usageMillis: Long)
 
 data class TimerPreset(
     val name: String,
@@ -75,7 +77,6 @@ class SettingsActivity : ComponentActivity() {
 
 // Define the labels consistently
 const val LABEL_LEISURE = "Leisure"
-const val LABEL_WORK = "Work"
 const val LABEL_IMPORTANT = "Important"
 const val LABEL_UNLABELED = "Unlabeled"
 
@@ -116,9 +117,13 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
     var customActivity by remember { mutableStateOf(prefs.getInt("work_interval", 45).toString()) }
     var customBreak by remember { mutableStateOf((prefs.getInt("break_interval", 300) / 60).toString()) }
 
-    val appUsageList = remember(hasPermission) {
-        if (hasPermission) getLaunchableAppsWithUsage(context) else emptyList()
+    val dailyUsage = remember(hasPermission) {
+        if (hasPermission) getDailyUsage(context) else emptyList()
     }
+    val appUsage = remember(hasPermission) {
+        if (hasPermission) getAppUsage(context) else emptyList()
+    }
+    val totalTodayUsage = dailyUsage.find { it.day == "Today" }?.usageMillis ?: 0L
 
     fun selectPreset(preset: TimerPreset) {
         selectedPresetName = preset.name
@@ -134,7 +139,7 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
     Scaffold(modifier = modifier.fillMaxSize(),
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("Settings") },
+                title = { Text("App activity details") },
                 navigationIcon = {
                     IconButton(onClick = { activity?.finish() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -143,111 +148,202 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
             )
         }
     ) { innerPadding ->
-        Column(modifier = Modifier.padding(innerPadding)) {
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                item {
-                    Text("Timer Presets", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-                }
-                items(presets) { preset ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { selectPreset(preset) }
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        RadioButton(
-                            selected = selectedPresetName == preset.name,
-                            onClick = { selectPreset(preset) }
-                        )
-                        Column(modifier = Modifier.padding(start = 16.dp)) {
-                            Text(preset.name, style = MaterialTheme.typography.titleMedium)
-                            val breakText = if (preset.breakSeconds < 60) "${preset.breakSeconds} sec" else "${preset.breakSeconds / 60} min"
-                            Text("Activity: ${preset.activityMinutes} min, Break: $breakText", style = MaterialTheme.typography.bodyMedium)
-                        }
+        LazyColumn(
+            modifier = Modifier
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp)
+        ) {
+
+            // --- Timer Presets ---
+            item {
+                Text("Timer Presets", style = MaterialTheme.typography.titleLarge)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            items(presets) { preset ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectPreset(preset) }
+                        .padding(vertical = 8.dp)
+                ) {
+                    RadioButton(
+                        selected = selectedPresetName == preset.name,
+                        onClick = { selectPreset(preset) }
+                    )
+                    Column(modifier = Modifier.padding(start = 16.dp)) {
+                        Text(preset.name, style = MaterialTheme.typography.titleMedium)
+                        val breakText = if (preset.breakSeconds < 60) "${preset.breakSeconds} sec" else "${preset.breakSeconds / 60} min"
+                        Text("Activity: ${preset.activityMinutes} min, Break: $breakText", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
+            }
 
-                if (selectedPresetName == "Custom Rhythm") {
-                    item {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            TextField(
-                                value = customActivity,
-                                onValueChange = { 
-                                    customActivity = it
-                                    prefs.edit().putInt("work_interval", it.toIntOrNull() ?: 45).apply()
-                                },
-                                label = { Text("Custom Activity (minutes)") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            TextField(
-                                value = customBreak,
-                                onValueChange = { 
-                                    customBreak = it
-                                    prefs.edit().putInt("break_interval", (it.toIntOrNull() ?: 5) * 60).apply()
-                                },
-                                label = { Text("Custom Break (minutes)") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                }
-
-                item { Divider(modifier = Modifier.padding(vertical = 16.dp)) }
-
+            if (selectedPresetName == "Custom Rhythm") {
                 item {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("App Labels", style = MaterialTheme.typography.titleLarge)
-                        Text("Categorize your apps. 'Important' apps will not be counted towards usage.", style = MaterialTheme.typography.bodyMedium)
+                        TextField(
+                            value = customActivity,
+                            onValueChange = { 
+                                customActivity = it
+                                prefs.edit().putInt("work_interval", it.toIntOrNull() ?: 45).apply()
+                            },
+                            label = { Text("Custom Activity (minutes)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        TextField(
+                            value = customBreak,
+                            onValueChange = { 
+                                customBreak = it
+                                prefs.edit().putInt("break_interval", (it.toIntOrNull() ?: 5) * 60).apply()
+                            },
+                            label = { Text("Custom Break (minutes)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
-                
-                if (!hasPermission) {
-                    item {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            elevation = CardDefaults.cardElevation(4.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(text = "Enable Usage Access", style = MaterialTheme.typography.titleMedium)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(text = "To sort apps by usage and show usage time, please grant access in system settings.")
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Button(onClick = {
-                                    val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                                    usageSettingsLauncher.launch(intent)
-                                }) {
-                                    Text("Open Settings")
-                                }
+            }
+            
+            item { Divider(modifier = Modifier.padding(vertical = 16.dp)) }
+
+            // --- App Activity Details ---
+            item {
+                Text("Screen time", style = MaterialTheme.typography.titleLarge)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = formatUsageTime(totalTodayUsage, detail = true),
+                    style = MaterialTheme.typography.headlineLarge
+                )
+                Text("Today", style = MaterialTheme.typography.bodyMedium)
+                Spacer(modifier = Modifier.height(24.dp))
+                if (dailyUsage.isNotEmpty()) {
+                    BarChart(dailyUsage)
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+
+            // --- App Usage List ---
+            items(appUsage) { app ->
+                AppUsageRow(appUsageInfo = app, packageManager = context.packageManager)
+            }
+
+            // --- Permission Card ---
+            if (!hasPermission) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp),
+                        elevation = CardDefaults.cardElevation(4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(text = "Enable Usage Access", style = MaterialTheme.typography.titleMedium)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = "To show screen time data, please grant access in system settings.")
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(onClick = {
+                                val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                                usageSettingsLauncher.launch(intent)
+                            }) {
+                                Text("Open Settings")
                             }
                         }
                     }
                 }
-
-                items(appUsageList) { appUsage ->
-                    AppLabelRow(appUsageInfo = appUsage, packageManager = context.packageManager)
-                }
             }
+
             if (isOnboarding) {
-                Button(
-                    onClick = {
-                        prefs.edit().putBoolean("onboarding_complete", true).apply()
-                        activity?.setResult(Activity.RESULT_OK)
-                        activity?.finish()
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(16.dp)
-                ) {
-                    Text("Finish Setup")
+                item {
+                    Button(
+                        onClick = {
+                            prefs.edit().putBoolean("onboarding_complete", true).apply()
+                            activity?.setResult(Activity.RESULT_OK)
+                            activity?.finish()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        Text("Finish Setup")
+                    }
                 }
             }
         }
     }
 }
 
-fun getLaunchableAppsWithUsage(context: Context): List<AppUsageInfo> {
+@Composable
+fun BarChart(dailyUsage: List<DailyUsage>) {
+    val maxUsage = dailyUsage.maxOfOrNull { it.usageMillis } ?: 1L
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(100.dp),
+        horizontalArrangement = Arrangement.SpaceAround,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        dailyUsage.forEach {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    modifier = Modifier
+                        .width(24.dp)
+                        .fillMaxHeight(it.usageMillis.toFloat() / maxUsage)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+                Text(it.day.take(3), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+fun getDailyUsage(context: Context): List<DailyUsage> {
+    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val calendar = Calendar.getInstance()
+    val endTime = calendar.timeInMillis
+    calendar.add(Calendar.DAY_OF_YEAR, -6)
+    calendar.set(Calendar.HOUR_OF_DAY, 0)
+    calendar.set(Calendar.MINUTE, 0)
+    calendar.set(Calendar.SECOND, 0)
+    calendar.set(Calendar.MILLISECOND, 0)
+    val startTime = calendar.timeInMillis
+
+    val stats = usageStatsManager.queryUsageStats(
+        UsageStatsManager.INTERVAL_DAILY,
+        startTime,
+        endTime
+    )
+
+    val dailyTotals = mutableMapOf<Int, Long>()
+    stats.forEach {
+        calendar.timeInMillis = it.firstTimeStamp
+        val dayOfYear = calendar.get(Calendar.DAY_OF_YEAR)
+        dailyTotals[dayOfYear] = (dailyTotals[dayOfYear] ?: 0L) + it.totalTimeInForeground
+    }
+
+    val result = mutableListOf<DailyUsage>()
+    val dayFormat = SimpleDateFormat("EEE", Locale.getDefault())
+    val todayCalendar = Calendar.getInstance()
+    val todayDayOfYear = todayCalendar.get(Calendar.DAY_OF_YEAR)
+
+    calendar.timeInMillis = startTime
+
+    for (i in 0..6) {
+        val dayOfYear = calendar.get(Calendar.DAY_OF_YEAR)
+        val usage = dailyTotals[dayOfYear] ?: 0L
+
+        val dayLabel = if (calendar.get(Calendar.YEAR) == todayCalendar.get(Calendar.YEAR) && dayOfYear == todayDayOfYear) {
+            "Today"
+        } else {
+            dayFormat.format(calendar.time)
+        }
+        result.add(DailyUsage(dayLabel, usage))
+        calendar.add(Calendar.DAY_OF_YEAR, 1)
+    }
+    return result
+}
+
+fun getAppUsage(context: Context): List<AppUsageInfo> {
     val pm = context.packageManager
     val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
         addCategory(Intent.CATEGORY_LAUNCHER)
@@ -258,85 +354,39 @@ fun getLaunchableAppsWithUsage(context: Context): List<AppUsageInfo> {
 
     val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val time = System.currentTimeMillis()
-    val usageStats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_WEEKLY, time - TimeUnit.DAYS.toMillis(7), time)
-    val usageMap = usageStats.associate { it.packageName to it.totalTimeInForeground }
+    val usageStats = usageStatsManager.queryUsageStats(
+        UsageStatsManager.INTERVAL_WEEKLY,
+        time - TimeUnit.DAYS.toMillis(7),
+        time
+    )
+    val usageMap = usageStats.associateBy({ it.packageName }, { it.totalTimeInForeground })
 
     return packageNames.mapNotNull { pkg ->
         try {
             val appInfo = pm.getApplicationInfo(pkg, PackageManager.GET_META_DATA)
-            AppUsageInfo(appInfo, usageMap[pkg] ?: 0)
+            val usage = usageMap[pkg] ?: 0
+            if (usage > 0) {
+                AppUsageInfo(appInfo, usage)
+            } else {
+                null
+            }
         } catch (e: PackageManager.NameNotFoundException) {
             null
         }
-    }.sortedByDescending { it.usageTimeMillis }.take(20)
-}
-
-@SuppressLint("InlinedApi")
-fun inferLabel(appInfo: ApplicationInfo, pm: PackageManager): String {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val categoryLabel = when (appInfo.category) {
-            ApplicationInfo.CATEGORY_GAME,
-            ApplicationInfo.CATEGORY_VIDEO,
-            ApplicationInfo.CATEGORY_SOCIAL,
-            ApplicationInfo.CATEGORY_IMAGE -> LABEL_LEISURE
-
-            ApplicationInfo.CATEGORY_PRODUCTIVITY,
-            ApplicationInfo.CATEGORY_NEWS -> LABEL_WORK
-
-            ApplicationInfo.CATEGORY_MAPS,
-            ApplicationInfo.CATEGORY_AUDIO -> LABEL_IMPORTANT
-
-            else -> null
-        }
-        if (categoryLabel != null) return categoryLabel
-    }
-
-    val pkg = appInfo.packageName.lowercase()
-    val appLabel = pm.getApplicationLabel(appInfo).toString().lowercase()
-
-    val importantKeywords = listOf("bank", "pay", "wallet", "payments", "upi", "card", "netbank")
-    val workKeywords = listOf("docs", "office", "slack", "teams", "drive", "calendar", "email", "outlook")
-    val leisureKeywords = listOf("game", "music", "youtube", "netflix", "spotify", "video", "tiktok", "instagram", "social")
-
-    if (importantKeywords.any { pkg.contains(it) || appLabel.contains(it) }) return LABEL_IMPORTANT
-    if (workKeywords.any { pkg.contains(it) || appLabel.contains(it) }) return LABEL_WORK
-    if (leisureKeywords.any { pkg.contains(it) || appLabel.contains(it) }) return LABEL_LEISURE
-
-    return LABEL_UNLABELED
+    }.sortedByDescending { it.usageTimeMillis }
 }
 
 @Composable
-fun AppLabelRow(appUsageInfo: AppUsageInfo, packageManager: PackageManager) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
-    val prefKey = "app_label_${appUsageInfo.appInfo.packageName}"
-
-    val defaultLabel = inferLabel(appUsageInfo.appInfo, packageManager)
-
-    var currentLabel by remember { mutableStateOf(prefs.getString(prefKey, defaultLabel) ?: defaultLabel) }
-    var expanded by remember { mutableStateOf(false) }
-    val labels = listOf(LABEL_LEISURE, LABEL_WORK, LABEL_IMPORTANT, LABEL_UNLABELED)
-    
+fun AppUsageRow(appUsageInfo: AppUsageInfo, packageManager: PackageManager) {
     val appIcon = remember(appUsageInfo.appInfo) {
         appUsageInfo.appInfo.loadIcon(packageManager)
-    }
-
-    fun formatUsageTime(timeMillis: Long): String {
-        if (timeMillis <= 0) return ""
-        val hours = TimeUnit.MILLISECONDS.toHours(timeMillis)
-        val minutes = TimeUnit.MILLISECONDS.toMinutes(timeMillis) % 60
-        return when {
-            hours > 0 -> "${hours}h ${minutes}m"
-            minutes > 0 -> "${minutes}m"
-            else -> "< 1m"
-        }
     }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(vertical = 8.dp)
     ) {
         val imageBitmap = remember(appIcon) {
             val bmp = if (appIcon is BitmapDrawable) {
@@ -355,40 +405,32 @@ fun AppLabelRow(appUsageInfo: AppUsageInfo, packageManager: PackageManager) {
             bmp.asImageBitmap()
         }
         Image(bitmap = imageBitmap, contentDescription = null, modifier = Modifier.size(40.dp))
-        
+
         Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
             Text(appUsageInfo.appInfo.loadLabel(packageManager).toString(), maxLines = 1)
-            val usageText = formatUsageTime(appUsageInfo.usageTimeMillis)
-            if (usageText.isNotEmpty()) {
-                Text(usageText, style = MaterialTheme.typography.bodySmall, fontSize = 12.sp)
-            }
-        }
-        
-        Box(modifier = Modifier.wrapContentSize(Alignment.TopStart)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.clickable { expanded = true }
-            ) {
-                Text(currentLabel, fontWeight = FontWeight.Bold)
-                Icon(Icons.Default.ArrowDropDown, contentDescription = "Change app label")
-            }
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                labels.forEach { label ->
-                    DropdownMenuItem(
-                        text = { Text(label) },
-                        onClick = { 
-                            currentLabel = label
-                            prefs.edit().putString(prefKey, label).apply()
-                            expanded = false
-                        }
-                    )
-                }
-            }
+            Text(
+                formatUsageTime(appUsageInfo.usageTimeMillis),
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 12.sp
+            )
         }
     }
+}
+
+fun formatUsageTime(timeMillis: Long, detail: Boolean = false): String {
+    if (timeMillis <= 0) return if (detail) "0 mins" else "0m"
+    val hours = TimeUnit.MILLISECONDS.toHours(timeMillis)
+    val minutes = TimeUnit.MILLISECONDS.toMinutes(timeMillis) % 60
+
+    val hourUnit = if (detail) "hr" else "h"
+    val minuteUnit = if (detail) "min" else "m"
+
+    val parts = mutableListOf<String>()
+    if (hours > 0) parts.add("$hours $hourUnit${if (hours > 1 && detail) "s" else ""}")
+    if (minutes > 0) parts.add("$minutes $minuteUnit${if (minutes > 1 && detail) "s" else ""}")
+
+    if (parts.isEmpty()) return if (detail) "< 1 minute" else "< 1m"
+    return parts.joinToString(if (detail) ", " else " ")
 }
 
 @Preview(showBackground = true)
