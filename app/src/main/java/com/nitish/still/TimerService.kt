@@ -88,118 +88,128 @@ class TimerService : Service() {
         }
     }
 
-    private fun trackUsage(shouldTrack: Boolean) {
+    private fun trackUsage(shouldTrackInitially: Boolean) {
         serviceScope.launch {
             val workIntervalMillis = TimeUnit.MINUTES.toMillis(prefs.getInt("work_interval", 60).toLong())
 
+            // Keep local mutable state for stable counting
+            var shouldTrack = shouldTrackInitially
+            var lastEventTime = System.currentTimeMillis() - 1000L
+            var lastForegroundPackage: String? = null
+
             while (true) {
+                // If geofence status might change externally, read the latest flag each loop
+                shouldTrack = isInsideHome
+
                 if (shouldTrack) {
                     val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                     if (powerManager.isInteractive) {
-                        val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-                        val time = System.currentTimeMillis()
-                        val events = usageStatsManager.queryEvents(time - 1000 * 60, time)
-                        val event = UsageEvents.Event()
-                        var foregroundApp: String? = null
+                        try {
+                            val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                            val now = System.currentTimeMillis()
 
-                        while (events.hasNextEvent()) {
-                            events.getNextEvent(event)
-                            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                                foregroundApp = event.packageName
-                            }
-                        }
+                            // Query only events since last loop to avoid duplicates
+                            val events = usageStatsManager.queryEvents(lastEventTime, now)
+                            val event = UsageEvents.Event()
+                            var mostRecentForeground: String? = null
+                            var mostRecentEventTime = lastEventTime
 
-                        if (foregroundApp != null && foregroundApp != packageName) {
-                            // Use applicationContext.packageManager (safe from a Service / coroutine)
-                            val pm = applicationContext.packageManager
-                            val savedLabel = prefs.getString("app_label_$foregroundApp", null)
-
-                            val isLeisure = try {
-                                when {
-                                    // If user explicitly labeled, respect that
-                                    savedLabel != null -> savedLabel == LABEL_LEISURE
-                                    // else infer using classifier (falls back to heuristics)
-                                    else -> {
-                                        val info = pm.getApplicationInfo(foregroundApp, 0)
-                                        isLeisureCategory(info, pm)
+                            while (events.hasNextEvent()) {
+                                events.getNextEvent(event)
+                                // track the most recent MOVE_TO_FOREGROUND in this window
+                                if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                                    mostRecentForeground = event.packageName
+                                    mostRecentEventTime = maxOf(mostRecentEventTime, event.timeStamp)
+                                } else if (event.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+                                    // if background happened, and it matches our lastForegroundPackage, we should clear it
+                                    if (event.packageName == lastForegroundPackage) {
+                                        lastForegroundPackage = null
                                     }
+                                    mostRecentEventTime = maxOf(mostRecentEventTime, event.timeStamp)
                                 }
-                            } catch (e: PackageManager.NameNotFoundException) {
-                                Log.w("TimerService", "getApplicationInfo failed for $foregroundApp: ${e.message}")
-                                false
-                            } catch (e: Exception) {
-                                Log.w("TimerService", "Unexpected error checking app info for $foregroundApp: ${e.message}")
-                                false
                             }
 
-                            if (isInsideHome && isLeisure) {
-                                continuousUsageMs += 1000
-                                Log.d("TimerService", "Foreground app (counted): $foregroundApp, Usage: $continuousUsageMs")
+                            // If there was a recent MOVE_TO_FOREGROUND use it; otherwise assume lastForegroundPackage persists
+                            val foregroundApp = mostRecentForeground ?: lastForegroundPackage
 
-                                if (continuousUsageMs >= workIntervalMillis) {
-                                    Log.d("TimerService", "Work interval reached!")
+                            // update lastEventTime to now so we don't re-process older events
+                            lastEventTime = now
+
+                            if (foregroundApp != null && foregroundApp != packageName) {
+                                // decide leisure vs important
+                                val pm = applicationContext.packageManager
+                                val savedLabel = prefs.getString("app_label_$foregroundApp", null)
+
+                                val isLeisure = try {
+                                    when {
+                                        savedLabel != null -> savedLabel == LABEL_LEISURE
+                                        else -> {
+                                            val info = pm.getApplicationInfo(foregroundApp, 0)
+                                            isLeisureCategory(info, pm)
+                                        }
+                                    }
+                                } catch (e: PackageManager.NameNotFoundException) {
+                                    Log.w("TimerService", "getApplicationInfo failed for $foregroundApp: ${e.message}")
+                                    false
+                                } catch (t: Throwable) {
+                                    Log.w("TimerService", "Error checking app info for $foregroundApp: ${t.message}")
+                                    false
+                                }
+
+                                // If same app continues in foreground across ticks, we accumulate
+                                if (isLeisure) {
+                                    if (foregroundApp == lastForegroundPackage) {
+                                        // add 1 second (1000ms) since our loop is ~1s
+                                        continuousUsageMs += 1000
+                                    } else {
+                                        // new leisure app started; start counting from 1 second
+                                        continuousUsageMs = 1000
+                                    }
+                                    lastForegroundPackage = foregroundApp
+
+                                    Log.d("TimerService", "Counting: $foregroundApp continuousMs=$continuousUsageMs (isInside=$isInsideHome)")
+
+                                    if (continuousUsageMs >= workIntervalMillis) {
+                                        Log.d("TimerService", "Work interval reached for $foregroundApp")
+                                        // TODO: trigger break workflow (camera prompt / teachable model)
+                                        continuousUsageMs = 0
+                                    }
+                                } else {
+                                    // not a leisure app: reset
                                     continuousUsageMs = 0
+                                    lastForegroundPackage = foregroundApp // track it so we don't mis-count
+                                    Log.v("TimerService", "Ignored app (not leisure): $foregroundApp")
                                 }
                             } else {
-                                // Not counted: either not leisure or not inside home
+                                // no foreground app or launcher — reset
                                 continuousUsageMs = 0
-                                Log.v("TimerService", "Ignored app (inside=$isInsideHome leisure=$isLeisure): $foregroundApp")
+                                lastForegroundPackage = null
                             }
-                        } else {
-                            continuousUsageMs = 0 // Reset if no app in foreground or if it's the launcher
+                        } catch (t: Throwable) {
+                            Log.w("TimerService", "trackUsage error: ${t.message}")
+                            // on error reset safely
+                            continuousUsageMs = 0
+                            lastForegroundPackage = null
+                            lastEventTime = System.currentTimeMillis()
                         }
-                        if (foregroundApp != null && foregroundApp != packageName) {
-                            // Use applicationContext.packageManager (safe from a Service / coroutine)
-                            val pm = applicationContext.packageManager
-                            val savedLabel = prefs.getString("app_label_$foregroundApp", null)
-
-                            val isLeisure = try {
-                                when {
-                                    // If user explicitly labeled, respect that
-                                    savedLabel != null -> savedLabel == LABEL_LEISURE
-                                    // else infer using classifier (falls back to heuristics)
-                                    else -> {
-                                        val info = pm.getApplicationInfo(foregroundApp, 0)
-                                        isLeisureCategory(info, pm)
-                                    }
-                                }
-                            } catch (e: PackageManager.NameNotFoundException) {
-                                Log.w("TimerService", "getApplicationInfo failed for $foregroundApp: ${e.message}")
-                                false
-                            } catch (e: Exception) {
-                                Log.w("TimerService", "Unexpected error checking app info for $foregroundApp: ${e.message}")
-                                false
-                            }
-
-                            if (isInsideHome && isLeisure) {
-                                continuousUsageMs += 1000
-                                Log.d("TimerService", "Foreground app (counted): $foregroundApp, Usage: $continuousUsageMs")
-
-                                if (continuousUsageMs >= workIntervalMillis) {
-                                    Log.d("TimerService", "Work interval reached!")
-                                    continuousUsageMs = 0
-                                }
-                            } else {
-                                // Not counted: either not leisure or not inside home
-                                continuousUsageMs = 0
-                                Log.v("TimerService", "Ignored app (inside=$isInsideHome leisure=$isLeisure): $foregroundApp")
-                            }
-                        } else {
-                            continuousUsageMs = 0 // Reset if no app in foreground or if it's the launcher
-                        }
-
-
                     } else {
-                        continuousUsageMs = 0 // Reset if screen is off
+                        // screen off: reset continuous usage count
+                        continuousUsageMs = 0
+                        lastForegroundPackage = null
                     }
                 } else {
-                    continuousUsageMs = 0 // Reset usage if not tracking
+                    // not tracking (outside geofence)
+                    continuousUsageMs = 0
+                    lastForegroundPackage = null
+                    lastEventTime = System.currentTimeMillis()
                 }
+
                 _usageState.value = TimerUsageState(continuousUsageMs)
-                delay(1000)
+                delay(1000L) // keep a steady 1s tick
             }
         }
     }
+
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

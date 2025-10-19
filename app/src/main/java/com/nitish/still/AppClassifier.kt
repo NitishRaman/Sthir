@@ -10,116 +10,153 @@ const val LABEL_IMPORTANT = "Important"
 const val LABEL_UNLABELED = "Unlabeled"
 
 /**
- * Returns true if the ApplicationInfo looks like a leisure app (audio/video/social/image/game/shopping/streaming).
- * This is conservative: prefer official Android category, then label-based checks.
- * Excludes known system/keyboard/banking/productivity apps.
+ * Final leisure classifier for Sthir.
+ * Marks apps as "leisure" if they belong to OTT, streaming, gaming, social media, shopping, or music.
+ * Ignores banking, productivity, system, education, and utility apps.
  */
-// AppClassifier.kt (replace existing isLeisureCategory function with this)
-// Paste this implementation (replace the old function)
-// --- Replace your existing isLeisureCategory(...) with this exact function ---
-// Replace your existing isLeisureCategory(...) with this exact function
 fun isLeisureCategory(appInfo: ApplicationInfo, pm: PackageManager): Boolean {
     val pkg = (appInfo.packageName ?: "").lowercase(Locale.getDefault())
 
-    // PRECISE blacklist: prefixes or full package ids that we want to exclude.
-    // Avoid generic substrings like "android" which match many valid packages.
+    // 🚫 System / Productivity / Bank / Utility blacklist
     val blacklistPrefixes = listOf(
-        "com.android.systemui",      // system UI
-        "com.android.providers",    // providers
-        "com.google.android.googlequicksearchbox", // search app if you want excluded
-        "com.google.android.gms",   // google play services
-        "com.google.android.inputmethod", // Gboard IME
-        "com.sec.android",          // samsung system packages (example)
-        "com.motorola",             // vendor/system OEM packages (optional)
-        "android",                   // keep as a last-resort token? -> **we will not use this**
-        "Main components"
+        "com.android.",
+        "android.",
+        "com.google.android.gms",
+        "com.google.android.gsf",
+        "com.google.android.inputmethod", // Gboard
+        "com.google.android.apps.docs", // Drive
+        "com.google.android.apps.work", // Workspace
+        "com.google.android.calendar",
+        "com.google.android.contacts",
+        "com.google.android.deskclock",
+        "com.google.android.keep",
+        "com.google.android.apps.nexuslauncher",
+        "com.google.android.apps.maps",
+        "com.google.android.apps.photos",
+        "com.google.android.apps.translate",
+        "com.google.android.apps.tachyon", // Duo
+        "com.microsoft.office",
+        "com.microsoft.teams",
+        "com.slack",
+        "com.skype",
+        "com.google.android.gm", // Gmail
+        "com.google.android.apps.meetings",
+        "com.google.android.apps.classroom",
+        "com.android.vending",
+        "com.sec.android",
+        "com.samsung.",
+        "com.motorola.",
+        "com.miui.",
+        "com.coloros.",
+        "com.huawei.",
+        "com.oneplus.",
+        "com.realme.",
+        "com.paytm",
+        "com.phonepe.app",
+        "net.one97.paytm",
+        "com.google.android.apps.walletnfcrel",
+        "com.mobikwik_new",
+        "com.axis.mobile",
+        "com.hdfcbank.mobilebanking",
+        "com.icicibank.imobile",
+        "com.sbi.SBIFreedomPlus",
+        "com.citi.citimobile",
+        "com.kotak.neobank",
+        "com.pnb.mobile",
+        "com.unionbank.ecommerce",
+        "in.co.bankofbaroda.mconnect",
+        "com.boi.mpassbook",
+        "com.dbs.in.digitalbank"
     )
 
-    // Only blacklist if pkg startsWith one of these prefixes (not contains)
-    if (blacklistPrefixes.any { prefix -> prefix.isNotBlank() && pkg.startsWith(prefix) }) {
+    if (blacklistPrefixes.any { pkg.startsWith(it) }) {
         android.util.Log.d("SettingsDebug", "isLeisureCategory: blacklisted pkg=$pkg")
         return false
     }
 
-    // If Android category is set (API 26+), trust it for leisure groups
+    // 🎮 Trust Android system category if available
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         when (appInfo.category) {
             ApplicationInfo.CATEGORY_GAME,
             ApplicationInfo.CATEGORY_VIDEO,
             ApplicationInfo.CATEGORY_SOCIAL,
             ApplicationInfo.CATEGORY_IMAGE,
-            ApplicationInfo.CATEGORY_AUDIO -> {
-                android.util.Log.d("SettingsDebug", "isLeisureCategory: category match pkg=$pkg category=${appInfo.category}")
-                return true
-            }
-            else -> { /* continue */ }
+            ApplicationInfo.CATEGORY_AUDIO -> return true
         }
     }
 
-    // Conservative whitelist of keywords for leisure/shopping/video/music.
-    // These are tested with contains() on package name or label.
-    // --- Replace your pkgWhitelist block with this one ---
-    val pkgWhitelist = listOf(
-        // 🎬 Streaming / Video / Entertainment
-        "youtube", "netflix", "primevideo", "prime", "disney", "hotstar",
-        "hulu", "twitch", "sonyliv", "zee5", "mxplayer", "voot", "altbalaji",
-        "crunchyroll", "animelab", "plex", "pluto", "sling", "apple.tv", "jiocinema",
-        "ott", "player", "video", "mediaclient",
+    // 🎬🎧 Social + OTT + Gaming + Shopping + Music keywords
+    val leisureKeywords = listOf(
+        // 🎬 OTT / Video Streaming
+        "youtube", "ytmusic", "netflix", "hotstar", "disney", "primevideo",
+        "amazonvideo", "sonyliv", "zee5", "mxplayer", "voot", "altbalaji",
+        "jiosaavn", "erosnow", "twitch", "crunchyroll", "animelab", "plex",
+        "jiocinema", "sling", "hulu", "pluto", "ott", "watch", "player",
 
         // 🎵 Music / Audio / Podcasts
-        "spotify", "gaana", "wynk", "saavn", "soundcloud", "music", "audiomack",
-        "podcast", "deezer", "ytmusic", "radio", "audiobooks", "audible",
+        "spotify", "gaana", "wynk", "saavn", "soundcloud", "music", "radio",
+        "deezer", "audible", "audiobooks", "podcast", "pandora", "tunein",
+        "stitcher", "fm", "mixcloud",
 
-        // 💬 Social Media / Chat / Community
+        // 💬 Social Media / Messaging
         "whatsapp", "instagram", "facebook", "messenger", "snapchat",
-        "telegram", "twitter", "x.", "threads", "reddit", "discord",
-        "tiktok", "wechat", "line", "signal", "skype", "clubhouse",
-        "pinterest", "tumblr", "be.real", "mastodon",
+        "telegram", "twitter", "x.", "threads", "discord", "reddit",
+        "tiktok", "wechat", "line", "signal", "clubhouse", "truthsocial",
+        "pinterest", "tumblr", "bereal", "quora", "bluesky",
 
-        // 🛒 Shopping / E-commerce
-        "amazon", "mshop", "flipkart", "myntra", "ajio", "snapdeal",
-        "meesho", "shopee", "ebay", "etsy", "aliexpress", "bigbasket",
-        "jiomart", "grofers", "blinkit", "nykaa", "tatacliq", "zara",
-        "shein", "paytm.mall", "shopping", "shop",
+        // 🛍️ Shopping / Lifestyle
+        "amazon", "flipkart", "myntra", "ajio", "meesho", "snapdeal",
+        "nykaa", "tatacliq", "bigbasket", "jiomart", "blinkit", "grofers",
+        "zara", "shein", "h&m", "shopping", "shopee", "ebay", "etsy",
+        "lenskart", "bewakoof", "decathlon", "1mg", "pharmeasy",
 
-        // 🎮 Games / Game platforms
-        "game", "games", "playstation", "xbox", "steam", "epicgames",
-        "pubg", "battlegrounds", "freefire", "callofduty", "clash", "subwaysurf",
-        "candycrush", "pokemon", "roblox", "minecraft", "ludo", "8ball", "bgmi",
+        // 🎮 Gaming
+        "game", "games", "pubg", "bgmi", "freefire", "callofduty",
+        "clashofclans", "clashroyale", "subwaysurf", "templerun", "8ball",
+        "roblox", "minecraft", "pokemon", "amongus", "fortnite", "ludo",
+        "playstation", "xbox", "epicgames", "steam",
 
-        // ❤️ Dating / Lifestyle
-        "tinder", "bumble", "okcupid", "hinge", "coffeemeetsbagel", "grindr", "badoo",
-        "match", "tan tan", "happn", "woo", "iris", "cupid", "jeevansathi", "shaadi",
+        // ❤️ Dating / Lifestyle / Fun
+        "tinder", "bumble", "okcupid", "hinge", "badoo", "happn", "tan tan",
+        "woo", "cupid", "iris", "coffeemeetsbagel", "grindr", "jeevansathi",
+        "shaadi", "trulymadly",
 
-        // 🗞️ News / Fun / Distraction
-        "inshorts", "dailyhunt", "reddit", "buzzfeed", "9gag", "memes", "funny", "quora",
-        "news", "feed", "shorts", "reels", "takatak"
+        // 📺 Short Video / Entertainment
+        "reels", "shorts", "moj", "takatak", "roposo", "chingari", "josh",
+        "trell", "boloindya", "mx.takatak", "mxtakatak",
+
+        // 📰 News / Fun
+        "inshorts", "dailyhunt", "buzzfeed", "9gag", "funny", "memes"
     )
 
-    if (pkgWhitelist.any { pkg.contains(it) }) {
-        android.util.Log.d("SettingsDebug", "isLeisureCategory: pkgWhitelist matched pkg=$pkg")
+    if (leisureKeywords.any { pkg.contains(it) }) {
+        android.util.Log.d("SettingsDebug", "isLeisureCategory: pkg match leisure pkg=$pkg")
         return true
     }
 
-    // Try app label (human name) as final check
+    // 🏷️ Last check — app label text
     try {
         val label = pm.getApplicationLabel(appInfo).toString().lowercase(Locale.getDefault())
-        if (pkgWhitelist.any { label.contains(it) }) {
-            android.util.Log.d("SettingsDebug", "isLeisureCategory: label matched pkg=$pkg label=$label")
+        if (leisureKeywords.any { label.contains(it) }) {
+            android.util.Log.d("SettingsDebug", "isLeisureCategory: label matched leisure pkg=$pkg label=$label")
             return true
         }
     } catch (t: Throwable) {
         android.util.Log.w("SettingsDebug", "isLeisureCategory: label read failed for pkg=$pkg ${t.message}")
     }
 
-    android.util.Log.d("SettingsDebug", "isLeisureCategory: default false for pkg=$pkg")
     return false
 }
 
+/**
+ * Returns top 5 leisure apps based on usage stats over the past 7 days.
+ */
 fun getTop5LeisureApps(context: android.content.Context): List<WeeklyAppUsage> {
     val weeklyUsage = (0..6).flatMap { dayIndex ->
         val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, dayIndex - 6) }
-        getAppUsageForDay(context, cal).filter { isLeisureCategory(it.appInfo, context.packageManager) }
+        getAppUsageForDay(context, cal).filter {
+            isLeisureCategory(it.appInfo, context.packageManager)
+        }
     }
 
     return weeklyUsage

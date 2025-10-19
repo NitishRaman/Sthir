@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Permissions -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -10,34 +15,126 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Add this inside <manifest> (outside <application>) -->
+    <!-- Needed to restart/auto-start after device boot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Keep queries so PackageManager can see launchable apps you listed -->
     <queries>
-        <!-- Show launcher apps so pm.queryIntentActivities(...) and getApplicationInfo() can see them -->
+        <!-- Core launchable apps -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
 
-        <!-- Explicit package visibility for common leisure/shopping/video apps -->
+        <!-- 🎬 OTT / Streaming / Video -->
         <package android:name="com.google.android.youtube" />
         <package android:name="com.google.android.apps.youtube.music" />
         <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.hotstar" />
+        <package android:name="in.startv.hotstar" />
+        <package android:name="com.disney.disneyplus" />
+        <package android:name="com.hulu.plus" />
+        <package android:name="com.hbo.hbonow" />
+        <package android:name="com.sonyliv" />
+        <package android:name="com.zee5.android" />
+        <package android:name="com.jio.media.ondemand" />
+        <package android:name="com.mxtech.videoplayer.ad" />
+        <package android:name="com.mxtech.videoplayer.pro" />
+        <package android:name="com.viacom18.voot" />
+        <package android:name="com.vootkids" />
+        <package android:name="com.erosnow" />
+        <package android:name="com.altbalaji.entertainment" />
+        <package android:name="com.amazon.avod.thirdpartyclient" />
+        <package android:name="com.plexapp.android" />
+        <package android:name="tv.twitch.android.app" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.gaana" />
+        <package android:name="com.jio.media.jiobeats" />
+        <package android:name="com.wynk.music" />
+        <package android:name="com.saavn.android" />
+        <package android:name="com.soundcloud.android" />
+
+        <!-- 🎮 Gaming -->
+        <package android:name="com.activision.callofduty.shooter" />
+        <package android:name="com.tencent.ig" /> <!-- PUBG Mobile -->
+        <package android:name="com.pubg.imobile" />
+        <package android:name="com.supercell.clashofclans" />
+        <package android:name="com.supercell.clashroyale" />
+        <package android:name="com.mobile.legends" />
+        <package android:name="com.king.candycrushsaga" />
+        <package android:name="com.miniclip.eightballpool" />
+        <package android:name="com.roblox.client" />
+        <package android:name="com.mojang.minecraftpe" />
+        <package android:name="com.gameloft.android.ANMP.GloftA8HM" />
+        <package android:name="com.riotgames.league.wildrift" />
+        <package android:name="com.epicgames.fortnite" />
+        <package android:name="com.playrix.homescapes" />
+        <package android:name="com.playrix.gardenscapes" />
+        <package android:name="com.ludo.king" />
+        <package android:name="com.kiloo.subwaysurf" />
+        <package android:name="com.imangi.templerun" />
+        <package android:name="com.imangi.templerun2" />
+
+        <!-- 🛍️ Shopping -->
         <package android:name="com.amazon.mShop.android.shopping" />
         <package android:name="in.amazon.mShop.android.shopping" />
         <package android:name="com.flipkart.android" />
-        <package android:name="com.snapchat.android" />
+        <package android:name="com.myntra.android" />
+        <package android:name="com.ajio.mobile" />
+        <package android:name="com.snapdeal.main" />
+        <package android:name="com.nykaa.android" />
+        <package android:name="com.tatacliq.tatacliq" />
+        <package android:name="com.meesho.supply" />
+        <package android:name="com.ajio.mens" />
+        <package android:name="com.ajio.womens" />
+
+        <!-- 💬 Social Media -->
         <package android:name="com.instagram.android" />
+        <package android:name="com.snapchat.android" />
         <package android:name="com.whatsapp" />
         <package android:name="com.twitter.android" />
+        <package android:name="com.facebook.katana" />
         <package android:name="com.reddit.frontpage" />
-        <package android:name="com.spotify.music" />
-        <package android:name="com.hotstar.player" />
-        <package android:name="com.hulu" />
-        <package android:name="com.disney.disneyplus" />
-        <!-- add more packages you expect to see -->
-    </queries>
+        <package android:name="com.linkedin.android" />
+        <package android:name="com.threads.android" />
+        <package android:name="com.tumblr" />
+        <package android:name="com.pinterest" />
+        <package android:name="com.quora.android" />
+        <package android:name="com.bereal.ft" />
 
+        <!-- 🕺 Short Video / Entertainment -->
+        <package android:name="com.zhiliaoapp.musically" /> <!-- TikTok -->
+        <package android:name="com.ss.android.ugc.trill" /> <!-- TikTok alt -->
+        <package android:name="com.joshvideo.app" />
+        <package android:name="com.roposo.android" />
+        <package android:name="in.mohalla.video" /> <!-- ShareChat -->
+        <package android:name="com.mxtech.videoplayer.ad" /> <!-- MX TakaTak -->
+        <package android:name="com.trell" />
+        <package android:name="com.chingari" />
+        <package android:name="in.boloindya.app" />
+
+        <!-- 📚 Reading / Comics / Fun -->
+        <package android:name="com.webtoons.platform" />
+        <package android:name="com.tap.tapcomics" />
+        <package android:name="com.kakaoent.webtoon" />
+        <package android:name="com.goodreads" />
+
+        <!-- 🎧 Podcast & Radio -->
+        <package android:name="com.google.android.apps.podcasts" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.stitcher.app" />
+        <package android:name="fm.player" />
+        <package android:name="com.pandora.android" />
+
+        <!-- 🧘 Relaxation / Mindfulness (optional leisure) -->
+        <package android:name="com.calm.android" />
+        <package android:name="com.headspace.android" />
+        <package android:name="com.meditopia" />
+        <package android:name="com.insighttimer" />
+    </queries>
 
 
     <application
@@ -65,6 +162,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
         <activity
             android:name=".MapActivity"
             android:exported="false" />
@@ -72,16 +170,29 @@
             android:name=".SettingsActivity"
             android:exported="false" />
 
+        <!-- Geofence receiver: keep exported=true so PendingIntent broadcasts reach it.
+             (Your GeofenceBroadcastReceiver.kt will receive geofence transitions.) -->
         <receiver
             android:name=".GeofenceBroadcastReceiver"
-            android:exported="true" />
+            android:exported="true">
+            <!-- optional intent-filter; geofence uses explicit PendingIntent usually
+                 but keeping an empty filter is fine. -->
+        </receiver>
 
+        <!-- Boot receiver: will receive BOOT_COMPLETED and start your TimerService -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- TimerService as a foreground service; keep foregroundServiceType=location -->
         <service
             android:name=".TimerService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
-
     </application>
-
 </manifest>
