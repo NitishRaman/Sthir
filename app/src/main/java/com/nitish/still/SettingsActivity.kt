@@ -163,19 +163,21 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
     var customActivity by remember { mutableStateOf(prefs.getInt("work_interval", 45).toString()) }
     var customBreak by remember { mutableStateOf((prefs.getInt("break_interval", 300) / 60).toString()) }
 
-    var selectedDayIndex by remember { mutableStateOf(0) } // 0-6, where 6 is today
+    var selectedDayIndex by remember { mutableStateOf(6) } // 0-6, where 6 is today
     var refreshTrigger by remember { mutableStateOf(0) } // Used to refresh the app list
 
     val dailyUsage = remember(hasPermission) {
         if (hasPermission) getDailyUsage(context) else emptyList()
     }
 
-// --- Filtered app list: skip true system apps; use user's saved label if present;
-// otherwise use classifier isLeisureCategory(...) to decide -->
+    // --- Filtered app list: skip true system apps; use user's saved label if present;
+    // otherwise use classifier isLeisureCategory(...) to decide -->
     val leisureAppUsage = remember(hasPermission, selectedDayIndex, refreshTrigger) {
-        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -selectedDayIndex) } // 0 = today
+        // selectedDayIndex uses the same indexing as getDailyUsage(): index 6 == Today (list is oldest->newest)
+        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, selectedDayIndex - 6) }
         val allApps = getAppUsageForDay(context, cal)
-        Log.d("SettingsDebug", "All apps count: ${allApps.size}")
+        Log.d("SettingsDebug", "leisureAppUsage: selectedDayIndex=$selectedDayIndex -> cal=${cal.time}")
+
 
         val filtered = allApps.filter { appUsage ->
             val appInfo = appUsage.appInfo
@@ -306,10 +308,12 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
                     null -> "" // safe fallback
                     "Today" -> "Today"
                     else -> {
-                        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -selectedDayIndex) }
+                        // convert selectedDayIndex (0..6 where 6 == Today) into a calendar date
+                        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, selectedDayIndex - 6) }
                         SimpleDateFormat("E, d MMM", Locale.getDefault()).format(cal.time)
                     }
                 }
+
 
 
                 if (selectedDayText.isNotEmpty()) {
@@ -388,102 +392,173 @@ fun BarChart(
     selectedDayIndex: Int,
     onDaySelected: (Int) -> Unit
 ) {
+    if (dailyUsage.isEmpty()) return
+
     val maxUsage = dailyUsage.maxOfOrNull { it.usageMillis } ?: 1L
+
+    // how tall the bar-area should be (above the label)
+    val chartHeight = 80.dp
+    val barWidth = 22.dp
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(100.dp),
-        horizontalArrangement = Arrangement.SpaceAround,
+            .height(chartHeight + 28.dp), // room for bar area + label + spacing
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom
     ) {
-        dailyUsage.forEachIndexed { index, dailyUsage ->
+        // dailyUsage is expected oldest -> newest (left -> right)
+        dailyUsage.forEachIndexed { index, du ->
             val isSelected = index == selectedDayIndex
-            val color = if (isSelected) MaterialTheme.colorScheme.primary else Color.LightGray
+            val barColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+
             Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable { onDaySelected(index) },
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { onDaySelected(index) }
+                verticalArrangement = Arrangement.Bottom // keep bar anchored at bottom
             ) {
+                // top spacer to push the bar to the bottom when bar height is less than chartHeight
+                // (we rely on Column verticalArrangement=Bottom but still ensure predictable sizing)
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Compute fraction safely (0..1)
+                val fraction = if (maxUsage > 0L) (du.usageMillis.toFloat() / maxUsage.toFloat()).coerceIn(0f, 1f) else 0f
+                val barHeight = chartHeight * fraction
+
+                // Bar box with explicit height (so bars align to the bottom baseline)
                 Box(
                     modifier = Modifier
-                        .width(24.dp)
-                        .fillMaxHeight(dailyUsage.usageMillis.toFloat() / maxUsage)
-                        .background(color)
+                        .width(barWidth)
+                        .height(barHeight)
+                        .background(barColor)
                 )
-                Text(dailyUsage.day.take(3), style = MaterialTheme.typography.bodySmall)
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // label: show 3-letter (or "Today")
+                Text(
+                    text = if (du.day == "Today") "Today" else du.day.take(3),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1
+                )
             }
         }
     }
 }
 
+
+
 fun getDailyUsage(context: Context): List<DailyUsage> {
     val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val pm = context.packageManager
-    val calendar = Calendar.getInstance()
-    val endTime = calendar.timeInMillis
 
-    // start 6 days ago at midnight
-    calendar.add(Calendar.DAY_OF_YEAR, -6)
-    calendar.set(Calendar.HOUR_OF_DAY, 0)
-    calendar.set(Calendar.MINUTE, 0)
-    calendar.set(Calendar.SECOND, 0)
-    calendar.set(Calendar.MILLISECOND, 0)
-    val startTime = calendar.timeInMillis
-
-    // Query daily usage stats in the range
-    val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
-    Log.d("SettingsDebug", "getDailyUsage: usageStats returned ${stats.size} entries (start=$startTime end=$endTime)")
-
-    // Map dayOfYear -> total usage (only for apps classified as leisure)
-    val dailyTotals = mutableMapOf<Int, Long>()
-    stats.forEach { us ->
-        val pkg = us.packageName ?: return@forEach
-        try {
-            val ai = pm.getApplicationInfo(pkg, 0)
-            val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
-                    (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
-            if (isSystemCore) {
-                Log.d("SettingsDebug", "getDailyUsage: skipping system core $pkg")
-                return@forEach
-            }
-
-            if (isLeisureCategory(ai, pm)) {
-                val cal = Calendar.getInstance().apply { timeInMillis = us.lastTimeStamp }
-                val dayOfYear = cal.get(Calendar.DAY_OF_YEAR) + cal.get(Calendar.YEAR) * 1000
-                dailyTotals[dayOfYear] = (dailyTotals[dayOfYear] ?: 0L) + us.totalTimeInForeground
-            } else {
-                Log.d("SettingsDebug", "getDailyUsage: classifier says not leisure: $pkg (label=${pm.getApplicationLabel(ai)})")
-            }
-        } catch (e: PackageManager.NameNotFoundException) {
-            Log.d("SettingsDebug", "getDailyUsage: package not visible / not installed: $pkg")
-        } catch (t: Throwable) {
-            Log.w("SettingsDebug", "getDailyUsage: error processing ${pkg}: ${t.message}")
-        }
-
+    // Start at midnight 6 days ago (oldest day)
+    val today = Calendar.getInstance()
+    val startCal = Calendar.getInstance().apply {
+        timeInMillis = today.timeInMillis
+        add(Calendar.DAY_OF_YEAR, -6)
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
     }
-
     val result = mutableListOf<DailyUsage>()
-    val dayFormat = SimpleDateFormat("EEE", Locale.ENGLISH) // force 3-letter day names reliably
-    val iterCal = Calendar.getInstance().apply { timeInMillis = startTime }
+    val dayFormat = SimpleDateFormat("EEE", Locale.ENGLISH)
+
+    val iterCal = Calendar.getInstance().apply { timeInMillis = startCal.timeInMillis }
 
     for (i in 0..6) {
-        val key = iterCal.get(Calendar.DAY_OF_YEAR) + iterCal.get(Calendar.YEAR) * 1000
-        val usage = dailyTotals[key] ?: 0L
-        val dayLabel = if (iterCal.get(Calendar.DAY_OF_YEAR) == Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
-            && iterCal.get(Calendar.YEAR) == Calendar.getInstance().get(Calendar.YEAR)
+        val dayStart = iterCal.timeInMillis
+
+        // build day end at 23:59:59.999 for that day
+        val endCal = Calendar.getInstance().apply {
+            timeInMillis = dayStart
+            set(Calendar.HOUR_OF_DAY, 23)
+            set(Calendar.MINUTE, 59)
+            set(Calendar.SECOND, 59)
+            set(Calendar.MILLISECOND, 999)
+        }
+        val dayEnd = endCal.timeInMillis
+
+        var sumForDay = 0L
+
+        try {
+            // Preferred: queryAndAggregateUsageStats(dayStart, dayEnd) if available
+            // This returns Map<String, UsageStats> aggregated for the range
+            val aggregated: Map<String, *>? = try {
+                @Suppress("UNCHECKED_CAST")
+                usageStatsManager.queryAndAggregateUsageStats(dayStart, dayEnd) as? Map<String, android.app.usage.UsageStats>
+            } catch (_: Throwable) {
+                null
+            }
+
+            if (aggregated != null && aggregated.isNotEmpty()) {
+                aggregated.forEach { (pkg, usageObj) ->
+                    if (usageObj !is android.app.usage.UsageStats) return@forEach
+                    try {
+                        val ai = pm.getApplicationInfo(pkg, 0)
+                        val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                        if (isSystemCore) return@forEach
+
+                        if (isLeisureCategory(ai, pm)) {
+                            sumForDay += usageObj.totalTimeInForeground
+                        }
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        // package not visible – skip
+                    }
+                }
+            } else {
+                // Fallback: queryUsageStats for the day range and sum returned entries
+                val dailyStats =
+                    usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, dayStart, dayEnd)
+                dailyStats.forEach { us ->
+                    val pkg = us.packageName ?: return@forEach
+                    try {
+                        val ai = pm.getApplicationInfo(pkg, 0)
+                        val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                        if (isSystemCore) return@forEach
+
+                        if (isLeisureCategory(ai, pm)) {
+                            sumForDay += us.totalTimeInForeground
+                        }
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        // skip
+                    } catch (t: Throwable) {
+                        Log.w("SettingsDebug", "getDailyUsage (fallback) error for $pkg: ${t.message}")
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w("SettingsDebug", "getDailyUsage: error querying day range ${Date(dayStart)} - ${Date(dayEnd)}: ${t.message}")
+        }
+
+        // label "Today" when it matches current day
+        val dayLabel = if (iterCal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR)
+            && iterCal.get(Calendar.YEAR) == today.get(Calendar.YEAR)
         ) {
             "Today"
         } else {
             dayFormat.format(iterCal.time).take(3)
         }
-        result.add(DailyUsage(dayLabel, usage))
+
+        Log.d("SettingsDebug", "getDailyUsage: day=${dayLabel} start=${Date(dayStart)} end=${Date(dayEnd)} leisureMillis=$sumForDay")
+
+        result.add(DailyUsage(dayLabel, sumForDay))
         iterCal.add(Calendar.DAY_OF_YEAR, 1)
     }
 
-    // Return reversed so index 0 == Today (most recent day first)
-    val finalList = result.reversed()
-    Log.d("SettingsDebug", "getDailyUsage: daily totals = ${finalList.map { "${it.day}:${it.usageMillis}" }}")
-    return finalList
+    // result is oldest -> newest (index 6 == Today)
+    Log.d("SettingsDebug", "getDailyUsage (final): ${result.map { "${it.day}:${it.usageMillis}" }}")
+    return result
 }
+
+
+
 
 
 
@@ -538,50 +613,49 @@ fun getAppUsageForDay(context: Context, calendar: Calendar): List<AppUsageInfo> 
     // 2) Add installed user apps, but apply stricter filtering to avoid "Main components" / support packages
     try {
         val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        // launchables computed above
         val launchableSet = launchables
 
         for (ai in installed) {
             val pkg = ai.packageName ?: continue
             if (pkg == context.packageName) continue
-            // skip if already present
             if (result.any { it.appInfo.packageName == pkg }) continue
 
-            // Skip true system core apps (but allow updated system apps)
+            // Skip true system core apps (allow updated system apps)
             val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             val isUpdatedSystem = (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
             if (isSystem && !isUpdatedSystem) continue
 
-            // prefer launchable apps. If not launchable, only include when there is usage and it's leisure-like
             val hasLauncherIntent = launchableSet.contains(pkg) || pm.getLaunchIntentForPackage(pkg) != null
             val usage = usageMap[pkg] ?: 0L
 
-            // If not launchable and no usage, skip
+            // If not launchable and no recorded usage, skip (not user-visible)
             if (!hasLauncherIntent && usage <= 0L) continue
 
-            // Try to get user-visible label and filter out generic system/placeholder labels
+            // Try to get the user-visible label (fall back to package short name)
             val label = try { pm.getApplicationLabel(ai).toString() } catch (_: Throwable) { pkg }
             val lowerLabel = label.lowercase(Locale.getDefault())
 
-            // Skip noisy labels that show up as "Main components", "Support components", etc.
-            if (lowerLabel.contains("component") || lowerLabel.contains("components") || lowerLabel.contains("support component")) {
+            // Skip noisy generic labels like "Main components" or "Support components"
+            if (lowerLabel.contains("component") || lowerLabel.contains("components") ||
+                lowerLabel.contains("support component") || lowerLabel.trim().isEmpty()) {
                 Log.d("SettingsDebug", "Skipping noisy label pkg=$pkg label=$label")
                 continue
             }
 
-            // Optional: skip common platform packages by package name prefix (catch manufacturer/system packages)
+            // Skip packages that are obviously platform packages by prefix if not launchable
             val lowerPkg = pkg.lowercase(Locale.getDefault())
-            if (lowerPkg.startsWith("com.android") || lowerPkg.startsWith("android") || lowerPkg.startsWith("com.google.android")) {
-                // allow if it's launchable (user-facing) or has usage and classifier says leisure
-                if (!hasLauncherIntent && usage <= 0L) continue
+            if ((lowerPkg.startsWith("com.android") || lowerPkg.startsWith("android") || lowerPkg.startsWith("com.motorola") || lowerPkg.startsWith("com.google.android"))
+                && !hasLauncherIntent && usage <= 0L) {
+                continue
             }
 
-            // Finally add the app (usage may be 0)
+            // OK — add it
             result.add(AppUsageInfo(ai, usage))
         }
     } catch (t: Throwable) {
         Log.w("SettingsDebug", "Failed to enumerate installed apps: ${t.message}")
     }
+
 
 
     // We DO NOT create placeholder ApplicationInfo() objects for unresolved packages.
