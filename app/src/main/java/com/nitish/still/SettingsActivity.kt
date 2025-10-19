@@ -42,6 +42,14 @@ import com.nitish.still.ui.theme.StillTheme
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
+import android.util.Log
+import androidx.compose.ui.platform.LocalDensity
+import com.nitish.still.isLeisureCategory
+import com.nitish.still.LABEL_LEISURE
+import com.nitish.still.LABEL_IMPORTANT
+import com.nitish.still.LABEL_UNLABELED
+
+
 
 data class AppUsageInfo(
     val appInfo: ApplicationInfo,
@@ -68,6 +76,13 @@ class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // --- DEBUG: Check what packages are visible to this app ---
+        val pm = packageManager
+        val visible = pm.getInstalledPackages(0)
+        Log.d("SettingsDebug", "Visible installed packages count: ${visible.size}")
+        visible.take(20).forEach { Log.d("SettingsDebug", "VisiblePkg: ${it.packageName}") }
+        // ----------------------------------------------------------
+
         val isOnboarding = intent.getBooleanExtra("is_onboarding", false)
         setContent {
             StillTheme {
@@ -77,10 +92,6 @@ class SettingsActivity : ComponentActivity() {
     }
 }
 
-// Define the labels consistently
-const val LABEL_LEISURE = "Leisure"
-const val LABEL_IMPORTANT = "Important"
-const val LABEL_UNLABELED = "Unlabeled"
 
 private fun hasUsageStatsPermission(context: Context): Boolean {
     val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
@@ -101,6 +112,39 @@ private fun hasUsageStatsPermission(context: Context): Boolean {
     return mode == AppOpsManager.MODE_ALLOWED
 }
 
+// Replace existing ensureDefaultLeisureLabels(...) with this exact function
+fun ensureDefaultLeisureLabels(context: Context) {
+    val pm = context.packageManager
+    val prefs = context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE)
+    val mainIntent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+
+    // Get all launchable package names
+    val launchable = pm.queryIntentActivities(mainIntent, 0)
+        .mapNotNull { it.activityInfo?.packageName }
+        .toSet()
+
+    launchable.forEach { pkg ->
+        try {
+            val appInfo = pm.getApplicationInfo(pkg, 0)
+            // ignore true system core apps and the host app itself
+            val isSystemCore = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                    (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+            if (isSystemCore) return@forEach
+            if (appInfo.packageName == context.packageName) return@forEach
+
+            val key = "app_label_$pkg"
+            if (!prefs.contains(key)) {
+                // default all launchable user apps to LEISURE unless user set it
+                prefs.edit().putString(key, LABEL_LEISURE).apply()
+            }
+        } catch (_: PackageManager.NameNotFoundException) {
+            // ignore unresolved package names
+        }
+    }
+}
+
+
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
@@ -119,36 +163,50 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
     var customActivity by remember { mutableStateOf(prefs.getInt("work_interval", 45).toString()) }
     var customBreak by remember { mutableStateOf((prefs.getInt("break_interval", 300) / 60).toString()) }
 
-    var selectedDayIndex by remember { mutableStateOf(6) } // 0-6, where 6 is today
+    var selectedDayIndex by remember { mutableStateOf(0) } // 0-6, where 6 is today
     var refreshTrigger by remember { mutableStateOf(0) } // Used to refresh the app list
 
     val dailyUsage = remember(hasPermission) {
         if (hasPermission) getDailyUsage(context) else emptyList()
     }
 
-    // This list is now filtered to show only Leisure apps
+// --- Filtered app list: skip true system apps; use user's saved label if present;
+// otherwise use classifier isLeisureCategory(...) to decide -->
     val leisureAppUsage = remember(hasPermission, selectedDayIndex, refreshTrigger) {
-        if (hasPermission) {
-            val cal = Calendar.getInstance().apply {
-                add(Calendar.DAY_OF_YEAR, selectedDayIndex - 6)
+        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -selectedDayIndex) } // 0 = today
+        val allApps = getAppUsageForDay(context, cal)
+        Log.d("SettingsDebug", "All apps count: ${allApps.size}")
+
+        val filtered = allApps.filter { appUsage ->
+            val appInfo = appUsage.appInfo
+            val pkg = appInfo.packageName ?: return@filter false
+
+            // Skip host app
+            if (pkg == context.packageName) return@filter false
+
+            // Skip true system core apps (allow updated system apps / user-installed ones)
+            val isSystemCore = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                    (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+            if (isSystemCore) return@filter false
+
+            // If user explicitly labeled the app, respect that (show only Leisure or Important)
+            val prefKey = "app_label_$pkg"
+            val savedLabel = prefs.getString(prefKey, null)
+            if (savedLabel != null) {
+                return@filter (savedLabel == LABEL_LEISURE || savedLabel == LABEL_IMPORTANT)
             }
-            val allApps = getAppUsageForDay(context, cal)
-            allApps.filter {
-                val prefKey = "app_label_${it.appInfo.packageName}"
-                val defaultLabel = inferLabel(it.appInfo)
-                val label = prefs.getString(prefKey, defaultLabel) ?: defaultLabel
-                label == LABEL_LEISURE
-            }
-        } else {
-            emptyList()
+
+            // Otherwise decide using the classifier (no heuristics here)
+            isLeisureCategory(appInfo, context.packageManager)
         }
+
+        Log.d("SettingsDebug", "After filtering leisure/important: ${filtered.size}")
+        filtered
     }
-    
-    val totalUsageForSelectedDay = if(selectedDayIndex == 6) {
-        dailyUsage.find { it.day == "Today" }?.usageMillis ?: 0L
-    } else {
-        dailyUsage.getOrNull(selectedDayIndex)?.usageMillis ?: 0L
-    }
+
+
+
+    val totalUsageForSelectedDay = dailyUsage.getOrNull(selectedDayIndex)?.usageMillis ?: 0L
 
     fun selectPreset(preset: TimerPreset) {
         selectedPresetName = preset.name
@@ -237,32 +295,43 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
             item {
                 Text("Screen time", style = MaterialTheme.typography.titleLarge)
                 Spacer(modifier = Modifier.height(8.dp))
+
                 Text(
                     text = formatUsageTime(totalUsageForSelectedDay, detail = true),
                     style = MaterialTheme.typography.headlineLarge
                 )
+
+                // selectedDayIndex: 0 == Today, 1 == Yesterday, etc.  (matches getDailyUsage().reversed())
                 val selectedDayText = when (val day = dailyUsage.getOrNull(selectedDayIndex)?.day) {
-                    null -> ""
+                    null -> "" // safe fallback
                     "Today" -> "Today"
                     else -> {
-                        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, selectedDayIndex - 6) }
+                        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -selectedDayIndex) }
                         SimpleDateFormat("E, d MMM", Locale.getDefault()).format(cal.time)
                     }
                 }
-                Text(selectedDayText, style = MaterialTheme.typography.bodyMedium)
+
+
+                if (selectedDayText.isNotEmpty()) {
+                    Text(selectedDayText, style = MaterialTheme.typography.bodyMedium)
+                }
+
                 Spacer(modifier = Modifier.height(24.dp))
+
                 if (dailyUsage.isNotEmpty()) {
                     BarChart(dailyUsage, selectedDayIndex) { index ->
                         selectedDayIndex = index
                     }
                 }
+
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
-            // --- App Usage List (now filtered) ---
+
+            // --- App Usage List (filtered to Leisure & Important only) ---
             items(leisureAppUsage) { app ->
                 AppUsageRow(
-                    appUsageInfo = app, 
+                    appUsageInfo = app,
                     packageManager = context.packageManager,
                     onLabelChanged = { refreshTrigger++ } // This triggers the list to refresh
                 )
@@ -348,8 +417,11 @@ fun BarChart(
 
 fun getDailyUsage(context: Context): List<DailyUsage> {
     val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val pm = context.packageManager
     val calendar = Calendar.getInstance()
     val endTime = calendar.timeInMillis
+
+    // start 6 days ago at midnight
     calendar.add(Calendar.DAY_OF_YEAR, -6)
     calendar.set(Calendar.HOUR_OF_DAY, 0)
     calendar.set(Calendar.MINUTE, 0)
@@ -357,71 +429,169 @@ fun getDailyUsage(context: Context): List<DailyUsage> {
     calendar.set(Calendar.MILLISECOND, 0)
     val startTime = calendar.timeInMillis
 
+    // Query daily usage stats in the range
     val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+    Log.d("SettingsDebug", "getDailyUsage: usageStats returned ${stats.size} entries (start=$startTime end=$endTime)")
 
-    // Create a map of day -> usage
+    // Map dayOfYear -> total usage (only for apps classified as leisure)
     val dailyTotals = mutableMapOf<Int, Long>()
-    stats.forEach {
-        val cal = Calendar.getInstance().apply { timeInMillis = it.firstTimeStamp }
-        val dayOfYear = cal.get(Calendar.DAY_OF_YEAR)
-        dailyTotals[dayOfYear] = (dailyTotals[dayOfYear] ?: 0L) + it.totalTimeInForeground
-    }
-    
-    val result = mutableListOf<DailyUsage>()
-    val dayFormat = SimpleDateFormat("EEE", Locale.getDefault())
-    val todayCalendar = Calendar.getInstance()
+    stats.forEach { us ->
+        val pkg = us.packageName ?: return@forEach
+        try {
+            val ai = pm.getApplicationInfo(pkg, 0)
+            val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                    (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+            if (isSystemCore) {
+                Log.d("SettingsDebug", "getDailyUsage: skipping system core $pkg")
+                return@forEach
+            }
 
-    val cal = Calendar.getInstance().apply { timeInMillis = startTime }
+            if (isLeisureCategory(ai, pm)) {
+                val cal = Calendar.getInstance().apply { timeInMillis = us.lastTimeStamp }
+                val dayOfYear = cal.get(Calendar.DAY_OF_YEAR) + cal.get(Calendar.YEAR) * 1000
+                dailyTotals[dayOfYear] = (dailyTotals[dayOfYear] ?: 0L) + us.totalTimeInForeground
+            } else {
+                Log.d("SettingsDebug", "getDailyUsage: classifier says not leisure: $pkg (label=${pm.getApplicationLabel(ai)})")
+            }
+        } catch (e: PackageManager.NameNotFoundException) {
+            Log.d("SettingsDebug", "getDailyUsage: package not visible / not installed: $pkg")
+        } catch (t: Throwable) {
+            Log.w("SettingsDebug", "getDailyUsage: error processing ${pkg}: ${t.message}")
+        }
+
+    }
+
+    val result = mutableListOf<DailyUsage>()
+    val dayFormat = SimpleDateFormat("EEE", Locale.ENGLISH) // force 3-letter day names reliably
+    val iterCal = Calendar.getInstance().apply { timeInMillis = startTime }
 
     for (i in 0..6) {
-        val dayOfYear = cal.get(Calendar.DAY_OF_YEAR)
-        val usage = dailyTotals[dayOfYear] ?: 0L
-        val dayLabel = if (cal.get(Calendar.DAY_OF_YEAR) == todayCalendar.get(Calendar.DAY_OF_YEAR) && cal.get(Calendar.YEAR) == todayCalendar.get(Calendar.YEAR)) {
+        val key = iterCal.get(Calendar.DAY_OF_YEAR) + iterCal.get(Calendar.YEAR) * 1000
+        val usage = dailyTotals[key] ?: 0L
+        val dayLabel = if (iterCal.get(Calendar.DAY_OF_YEAR) == Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+            && iterCal.get(Calendar.YEAR) == Calendar.getInstance().get(Calendar.YEAR)
+        ) {
             "Today"
         } else {
-            dayFormat.format(cal.time)
+            dayFormat.format(iterCal.time).take(3)
         }
         result.add(DailyUsage(dayLabel, usage))
-        cal.add(Calendar.DAY_OF_YEAR, 1)
+        iterCal.add(Calendar.DAY_OF_YEAR, 1)
     }
-    return result
+
+    // Return reversed so index 0 == Today (most recent day first)
+    val finalList = result.reversed()
+    Log.d("SettingsDebug", "getDailyUsage: daily totals = ${finalList.map { "${it.day}:${it.usageMillis}" }}")
+    return finalList
 }
+
+
+
 
 fun getAppUsageForDay(context: Context, calendar: Calendar): List<AppUsageInfo> {
     val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val pm = context.packageManager
 
-    // Set calendar to the start of the selected day
-    calendar.set(Calendar.HOUR_OF_DAY, 0)
-    calendar.set(Calendar.MINUTE, 0)
-    calendar.set(Calendar.SECOND, 0)
-    calendar.set(Calendar.MILLISECOND, 0)
-    val startTime = calendar.timeInMillis
+    // day range (midnight -> 23:59:59.999)
+    val calStart = Calendar.getInstance().apply {
+        timeInMillis = calendar.timeInMillis
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }
+    val calEnd = Calendar.getInstance().apply {
+        timeInMillis = calendar.timeInMillis
+        set(Calendar.HOUR_OF_DAY, 23); set(Calendar.MINUTE, 59); set(Calendar.SECOND, 59); set(Calendar.MILLISECOND, 999)
+    }
+    val startTime = calStart.timeInMillis
+    val endTime = calEnd.timeInMillis
 
-    // Set calendar to the end of the selected day
-    calendar.set(Calendar.HOUR_OF_DAY, 23)
-    calendar.set(Calendar.MINUTE, 59)
-    calendar.set(Calendar.SECOND, 59)
-    calendar.set(Calendar.MILLISECOND, 999)
-    val endTime = calendar.timeInMillis
-
-    // Query stats for the selected day
     val usageStats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+    val usageMap = usageStats.associateBy({ it.packageName }, { it.totalTimeInForeground })
+    Log.d("SettingsDebug", "UsageMap size: ${usageMap.size}")
 
-    // Map stats to AppUsageInfo
-    return usageStats
-        .filter { it.totalTimeInForeground > 0 }
-        .mapNotNull {
-            try {
-                val appInfo = pm.getApplicationInfo(it.packageName, 0)
-                AppUsageInfo(appInfo, it.totalTimeInForeground)
-            } catch (e: PackageManager.NameNotFoundException) {
-                // System packages or uninstalled apps might be in stats
-                null
-            }
+    val result = mutableListOf<AppUsageInfo>()
+
+    // 1) Launchable user apps
+    val mainIntent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+    val launchables = pm.queryIntentActivities(mainIntent, 0)
+        .mapNotNull { it.activityInfo?.packageName }
+        .toSortedSet()
+
+    for (pkg in launchables) {
+        try {
+            val appInfo = pm.getApplicationInfo(pkg, 0)
+            // Skip host app
+            if (appInfo.packageName == context.packageName) continue
+            // Skip true system core apps, allow updated system apps (installed updates)
+            val isSystemCore = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                    (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+            if (isSystemCore) continue
+
+            val usage = usageMap[pkg] ?: 0L
+            result.add(AppUsageInfo(appInfo, usage))
+        } catch (e: PackageManager.NameNotFoundException) {
+            Log.w("SettingsDebug", "Launchable pkg not resolvable: $pkg")
+        } catch (t: Throwable) {
+            Log.w("SettingsDebug", "Error reading launchable pkg $pkg: ${t.message}")
         }
-        .sortedByDescending { it.usageTimeMillis }
+    }
+
+    // 2) Add installed user apps, but apply stricter filtering to avoid "Main components" / support packages
+    try {
+        val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        // launchables computed above
+        val launchableSet = launchables
+
+        for (ai in installed) {
+            val pkg = ai.packageName ?: continue
+            if (pkg == context.packageName) continue
+            // skip if already present
+            if (result.any { it.appInfo.packageName == pkg }) continue
+
+            // Skip true system core apps (but allow updated system apps)
+            val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+            val isUpdatedSystem = (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            if (isSystem && !isUpdatedSystem) continue
+
+            // prefer launchable apps. If not launchable, only include when there is usage and it's leisure-like
+            val hasLauncherIntent = launchableSet.contains(pkg) || pm.getLaunchIntentForPackage(pkg) != null
+            val usage = usageMap[pkg] ?: 0L
+
+            // If not launchable and no usage, skip
+            if (!hasLauncherIntent && usage <= 0L) continue
+
+            // Try to get user-visible label and filter out generic system/placeholder labels
+            val label = try { pm.getApplicationLabel(ai).toString() } catch (_: Throwable) { pkg }
+            val lowerLabel = label.lowercase(Locale.getDefault())
+
+            // Skip noisy labels that show up as "Main components", "Support components", etc.
+            if (lowerLabel.contains("component") || lowerLabel.contains("components") || lowerLabel.contains("support component")) {
+                Log.d("SettingsDebug", "Skipping noisy label pkg=$pkg label=$label")
+                continue
+            }
+
+            // Optional: skip common platform packages by package name prefix (catch manufacturer/system packages)
+            val lowerPkg = pkg.lowercase(Locale.getDefault())
+            if (lowerPkg.startsWith("com.android") || lowerPkg.startsWith("android") || lowerPkg.startsWith("com.google.android")) {
+                // allow if it's launchable (user-facing) or has usage and classifier says leisure
+                if (!hasLauncherIntent && usage <= 0L) continue
+            }
+
+            // Finally add the app (usage may be 0)
+            result.add(AppUsageInfo(ai, usage))
+        }
+    } catch (t: Throwable) {
+        Log.w("SettingsDebug", "Failed to enumerate installed apps: ${t.message}")
+    }
+
+
+    // We DO NOT create placeholder ApplicationInfo() objects for unresolved packages.
+    // That avoids package-name-only "fake" entries which caused label/icon problems.
+
+    return result.sortedByDescending { it.usageTimeMillis }
 }
+
+
+
 
 @SuppressLint("InlinedApi")
 fun inferLabel(appInfo: ApplicationInfo): String {
@@ -440,7 +610,7 @@ fun inferLabel(appInfo: ApplicationInfo): String {
 
 @Composable
 fun AppUsageRow(
-    appUsageInfo: AppUsageInfo, 
+    appUsageInfo: AppUsageInfo,
     packageManager: PackageManager,
     onLabelChanged: () -> Unit
 ) {
@@ -448,13 +618,56 @@ fun AppUsageRow(
     val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
     val prefKey = "app_label_${appUsageInfo.appInfo.packageName}"
 
-    val defaultLabel = remember(appUsageInfo.appInfo) { inferLabel(appUsageInfo.appInfo) }
-    var currentLabel by remember { mutableStateOf(prefs.getString(prefKey, defaultLabel) ?: defaultLabel) }
+    // default to saved pref if present, otherwise default to LABEL_LEISURE
+    val defaultLabel = remember { prefs.getString(prefKey, LABEL_LEISURE) ?: LABEL_LEISURE }
+    var currentLabel by remember { mutableStateOf(defaultLabel) }
     var expanded by remember { mutableStateOf(false) }
     val labels = listOf(LABEL_LEISURE, LABEL_IMPORTANT, LABEL_UNLABELED)
 
-    val appIcon = remember(appUsageInfo.appInfo) {
-        appUsageInfo.appInfo.loadIcon(packageManager)
+    // ---- Get display name safely ----
+    val pkgName = appUsageInfo.appInfo.packageName ?: ""
+    val displayName = remember(pkgName) {
+        try {
+            // try to resolve a fresh ApplicationInfo (safer)
+            val ai = packageManager.getApplicationInfo(pkgName, 0)
+            packageManager.getApplicationLabel(ai).toString()
+        } catch (t: Throwable) {
+            // fallback: pretty last segment of package name
+            pkgName.substringAfterLast('.').replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString()
+            }
+        }
+    }
+
+    // ---- Load icon safely ----
+    val iconDrawable = remember(pkgName) {
+        try {
+            // prefer using appInfo -> may work if appInfo is full
+            packageManager.getApplicationIcon(pkgName)
+        } catch (t: Throwable) {
+            try {
+                packageManager.getDefaultActivityIcon()
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+
+    // convert drawable to bitmap for Compose Image
+    val imageBitmap = remember(iconDrawable) {
+        iconDrawable?.let { icon ->
+            if (icon is BitmapDrawable && icon.bitmap != null) {
+                icon.bitmap
+            } else {
+                val w = (icon.intrinsicWidth.takeIf { it > 0 } ?: 48)
+                val h = (icon.intrinsicHeight.takeIf { it > 0 } ?: 48)
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bmp)
+                icon.setBounds(0, 0, canvas.width, canvas.height)
+                icon.draw(canvas)
+                bmp
+            }
+        }
     }
 
     Row(
@@ -463,60 +676,50 @@ fun AppUsageRow(
             .fillMaxWidth()
             .padding(vertical = 8.dp)
     ) {
-        val imageBitmap = remember(appIcon) {
-            val bmp = if (appIcon is BitmapDrawable) {
-                appIcon.bitmap
-            } else {
-                val bmp = Bitmap.createBitmap(
-                    appIcon.intrinsicWidth.coerceAtLeast(1),
-                    appIcon.intrinsicHeight.coerceAtLeast(1),
-                    Bitmap.Config.ARGB_8888
-                )
-                val canvas = Canvas(bmp)
-                appIcon.setBounds(0, 0, canvas.width, canvas.height)
-                appIcon.draw(canvas)
-                bmp
+        if (imageBitmap != null) {
+            Image(bitmap = imageBitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.size(40.dp))
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(MaterialTheme.colorScheme.primary, shape = MaterialTheme.shapes.small),
+                contentAlignment = Alignment.Center
+            ) {
+                val short = pkgName.substringAfterLast('.', "app").take(2).uppercase(Locale.getDefault())
+                Text(short, color = Color.White, fontSize = 12.sp)
             }
-            bmp.asImageBitmap()
         }
-        Image(bitmap = imageBitmap, contentDescription = null, modifier = Modifier.size(40.dp))
 
-        Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
-            Text(appUsageInfo.appInfo.loadLabel(packageManager).toString(), maxLines = 1)
-            Text(
-                formatUsageTime(appUsageInfo.usageTimeMillis),
-                style = MaterialTheme.typography.bodySmall,
-                fontSize = 12.sp
-            )
+        Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(displayName, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(formatUsageTime(appUsageInfo.usageTimeMillis), style = MaterialTheme.typography.bodySmall)
         }
-        
+
         Box(modifier = Modifier.wrapContentSize(Alignment.TopStart)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.clickable { expanded = true }
+                modifier = Modifier.clickable { expanded = true }.padding(start = 8.dp)
             ) {
                 Text(currentLabel)
                 Icon(Icons.Default.ArrowDropDown, contentDescription = "Change app label")
             }
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
+
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 labels.forEach { label ->
-                    DropdownMenuItem(
-                        text = { Text(label) },
-                        onClick = { 
-                            currentLabel = label
-                            prefs.edit().putString(prefKey, label).apply()
-                            expanded = false
-                            onLabelChanged() // This line triggers the refresh
-                        }
-                    )
+                    DropdownMenuItem(text = { Text(label) }, onClick = {
+                        currentLabel = label
+                        prefs.edit().putString(prefKey, label).apply()
+                        expanded = false
+                        onLabelChanged()
+                    })
                 }
             }
         }
     }
 }
+
+
 
 fun formatUsageTime(timeMillis: Long, detail: Boolean = false): String {
     if (timeMillis <= 0) return if (detail) "0 mins" else "0m"

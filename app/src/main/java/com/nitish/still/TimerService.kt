@@ -21,10 +21,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
+import android.content.pm.PackageManager
+
+
+data class TimerUsageState(val continuousUsageMs: Long)
 
 class TimerService : Service() {
 
@@ -32,8 +36,8 @@ class TimerService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private val binder = LocalBinder()
 
-    private val _usageState = MutableSharedFlow<UsageState>(replay = 1)
-    val usageState = _usageState.asSharedFlow()
+    private val _usageState = MutableStateFlow(TimerUsageState(0L))
+    val usageState = _usageState.asStateFlow()
 
     private var continuousUsageMs = 0L
     private lateinit var prefs: SharedPreferences
@@ -56,10 +60,9 @@ class TimerService : Service() {
         createNotificationChannel()
         updateNotification(isInsideHome)
 
-        // Cancel any previous tracking job to avoid multiple instances
-        serviceJob.cancel()
+        serviceJob.cancel() // Cancel any previous job
         serviceJob = Job()
-        trackUsage(isInsideHome) // Start or resume tracking based on current status
+        trackUsage(isInsideHome)
 
         return START_STICKY
     }
@@ -69,7 +72,7 @@ class TimerService : Service() {
         val pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE)
 
         val title = if (isInsideHome) "You are at home" else "You are outside home"
-        val text = if (isInsideHome) "Still is active" else "Still is deactivated"
+        val text = if (isInsideHome) "Still is active and tracking screen time." else "Still is paused."
 
         val notification = NotificationCompat.Builder(this, "still_channel")
             .setContentTitle(title)
@@ -98,6 +101,7 @@ class TimerService : Service() {
                         val events = usageStatsManager.queryEvents(time - 1000 * 60, time)
                         val event = UsageEvents.Event()
                         var foregroundApp: String? = null
+
                         while (events.hasNextEvent()) {
                             events.getNextEvent(event)
                             if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
@@ -106,31 +110,92 @@ class TimerService : Service() {
                         }
 
                         if (foregroundApp != null && foregroundApp != packageName) {
-                            // This line will now work correctly
-                            val appLabel = prefs.getString("app_label_$foregroundApp", LABEL_UNLABELED)
-                            
-                            // This line will also work correctly
-                            if (appLabel != LABEL_IMPORTANT) {
+                            // Use applicationContext.packageManager (safe from a Service / coroutine)
+                            val pm = applicationContext.packageManager
+                            val savedLabel = prefs.getString("app_label_$foregroundApp", null)
+
+                            val isLeisure = try {
+                                when {
+                                    // If user explicitly labeled, respect that
+                                    savedLabel != null -> savedLabel == LABEL_LEISURE
+                                    // else infer using classifier (falls back to heuristics)
+                                    else -> {
+                                        val info = pm.getApplicationInfo(foregroundApp, 0)
+                                        isLeisureCategory(info, pm)
+                                    }
+                                }
+                            } catch (e: PackageManager.NameNotFoundException) {
+                                Log.w("TimerService", "getApplicationInfo failed for $foregroundApp: ${e.message}")
+                                false
+                            } catch (e: Exception) {
+                                Log.w("TimerService", "Unexpected error checking app info for $foregroundApp: ${e.message}")
+                                false
+                            }
+
+                            if (isInsideHome && isLeisure) {
                                 continuousUsageMs += 1000
-                                Log.d("TimerService", "Foreground app: $foregroundApp, Usage: $continuousUsageMs")
+                                Log.d("TimerService", "Foreground app (counted): $foregroundApp, Usage: $continuousUsageMs")
 
                                 if (continuousUsageMs >= workIntervalMillis) {
                                     Log.d("TimerService", "Work interval reached!")
                                     continuousUsageMs = 0
                                 }
                             } else {
+                                // Not counted: either not leisure or not inside home
                                 continuousUsageMs = 0
+                                Log.v("TimerService", "Ignored app (inside=$isInsideHome leisure=$isLeisure): $foregroundApp")
                             }
                         } else {
-                            continuousUsageMs = 0
+                            continuousUsageMs = 0 // Reset if no app in foreground or if it's the launcher
                         }
+                        if (foregroundApp != null && foregroundApp != packageName) {
+                            // Use applicationContext.packageManager (safe from a Service / coroutine)
+                            val pm = applicationContext.packageManager
+                            val savedLabel = prefs.getString("app_label_$foregroundApp", null)
+
+                            val isLeisure = try {
+                                when {
+                                    // If user explicitly labeled, respect that
+                                    savedLabel != null -> savedLabel == LABEL_LEISURE
+                                    // else infer using classifier (falls back to heuristics)
+                                    else -> {
+                                        val info = pm.getApplicationInfo(foregroundApp, 0)
+                                        isLeisureCategory(info, pm)
+                                    }
+                                }
+                            } catch (e: PackageManager.NameNotFoundException) {
+                                Log.w("TimerService", "getApplicationInfo failed for $foregroundApp: ${e.message}")
+                                false
+                            } catch (e: Exception) {
+                                Log.w("TimerService", "Unexpected error checking app info for $foregroundApp: ${e.message}")
+                                false
+                            }
+
+                            if (isInsideHome && isLeisure) {
+                                continuousUsageMs += 1000
+                                Log.d("TimerService", "Foreground app (counted): $foregroundApp, Usage: $continuousUsageMs")
+
+                                if (continuousUsageMs >= workIntervalMillis) {
+                                    Log.d("TimerService", "Work interval reached!")
+                                    continuousUsageMs = 0
+                                }
+                            } else {
+                                // Not counted: either not leisure or not inside home
+                                continuousUsageMs = 0
+                                Log.v("TimerService", "Ignored app (inside=$isInsideHome leisure=$isLeisure): $foregroundApp")
+                            }
+                        } else {
+                            continuousUsageMs = 0 // Reset if no app in foreground or if it's the launcher
+                        }
+
+
                     } else {
-                        continuousUsageMs = 0
+                        continuousUsageMs = 0 // Reset if screen is off
                     }
                 } else {
                     continuousUsageMs = 0 // Reset usage if not tracking
                 }
-                _usageState.tryEmit(UsageState(continuousUsageMs = continuousUsageMs))
+                _usageState.value = TimerUsageState(continuousUsageMs)
                 delay(1000)
             }
         }

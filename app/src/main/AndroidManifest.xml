@@ -2,23 +2,41 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-permission
-        android:name="android.permission.PACKAGE_USAGE_STATS"
-        tools:ignore="ProtectedPermissions" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <uses-permission android:name="android.permission.CAMERA"/>
-    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>
 
+    <!-- Add this inside <manifest> (outside <application>) -->
     <queries>
+        <!-- Show launcher apps so pm.queryIntentActivities(...) and getApplicationInfo() can see them -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+
+        <!-- Explicit package visibility for common leisure/shopping/video apps -->
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.amazon.mShop.android.shopping" />
+        <package android:name="in.amazon.mShop.android.shopping" />
+        <package android:name="com.flipkart.android" />
+        <package android:name="com.snapchat.android" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.whatsapp" />
+        <package android:name="com.twitter.android" />
+        <package android:name="com.reddit.frontpage" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.hotstar.player" />
+        <package android:name="com.hulu" />
+        <package android:name="com.disney.disneyplus" />
+        <!-- add more packages you expect to see -->
     </queries>
+
+
 
     <application
         android:name=".StillApplication"
@@ -28,8 +46,9 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android.supportsRtl="true"
-        android:theme="@style/Theme.Still.NoActionBar">
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Still"
+        tools:targetApi="31">
 
         <meta-data
             android:name="com.google.android.geo.API_KEY"
@@ -38,34 +57,28 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.Still.NoActionBar">
+            android:theme="@style/Theme.Still">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
         <activity
-            android:name=".SettingsActivity"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.Still.NoActionBar" />
-        <activity
             android:name=".MapActivity"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.Still.NoActionBar" />
-        <service android:name=".TimerService"
-            android:foregroundServiceType="location" />
+            android:exported="false" />
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false" />
 
         <receiver
             android:name=".GeofenceBroadcastReceiver"
-            android:enabled="true"
-            android:exported="true" >
-            <intent-filter>
-                <action android:name="com.nitish.still.ACTION_GEOFENCE_EVENT" />
-            </intent-filter>
-        </receiver>
+            android:exported="true" />
 
+        <service
+            android:name=".TimerService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location" />
 
     </application>
 

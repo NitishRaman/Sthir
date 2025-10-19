@@ -1,12 +1,13 @@
-
 package com.nitish.still
 
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.PendingIntent
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Build
@@ -18,46 +19,17 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material3.Button
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberDrawerState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -67,6 +39,8 @@ import com.google.android.gms.location.LocationServices
 import com.nitish.still.ui.theme.StillTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Calendar
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -184,7 +158,7 @@ fun LocationPermissionScreen(onFinished: () -> Unit) {
                 mapLauncher.launch(Intent(context, MapActivity::class.java))
             }
         } else {
-            Toast.makeText(context, "\'Allow all the time\' is required for geofencing.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "'Allow all the time' is required for geofencing.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -211,13 +185,12 @@ fun LocationPermissionScreen(onFinished: () -> Unit) {
             Text(text = "Let’s begin by granting permissions.", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Still requires 3 permissions to work correctly:\n1. Location (to set your home zone)\n2. Background Location (\'Allow all the time\')\n3. Physical Activity (for battery saving)",
+                text = "Still requires 3 permissions to work correctly:\n1. Location (to set your home zone)\n2. Background Location ('Allow all the time')\n3. Physical Activity (for battery saving)",
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(bottom = 32.dp)
             )
             Button(onClick = {
-                // Always start the permission chain from the beginning.
                 fineLocationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             }) {
                 Text("Grant Permissions")
@@ -225,7 +198,6 @@ fun LocationPermissionScreen(onFinished: () -> Unit) {
         }
     }
 }
-
 
 @Composable
 fun SettingsScreenWrapper(onFinished: () -> Unit, isOnboarding: Boolean) {
@@ -253,26 +225,32 @@ fun HomeScreenWithNavigation() {
     val scope = rememberCoroutineScope()
     val app = context.applicationContext as StillApplication
     val isInsideHome by app.isInsideHome.collectAsState()
+    var totalDailyUsage by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(isInsideHome) {
+        if (isInsideHome) {
+            while (true) {
+                totalDailyUsage = calculateTotalLeisureUsage(context)
+                delay(1000L) // updates every second
+            }
+        }
+    }
+
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
 
     val mapLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            // Re-setup geofence with new location
             setupGeofence(context)
-            // Immediately check current location against the new home
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 fusedLocationClient.lastLocation.addOnSuccessListener { currentLocation ->
                     if (currentLocation != null) {
                         val homeLat = prefs.getString("home_latitude", "0.0")?.toDoubleOrNull() ?: 0.0
                         val homeLon = prefs.getString("home_longitude", "0.0")?.toDoubleOrNull() ?: 0.0
-                        val homeLocation = Location("Home").apply {
-                            latitude = homeLat
-                            longitude = homeLon
-                        }
+                        val homeLocation = Location("Home").apply { latitude = homeLat; longitude = homeLon }
                         val distance = currentLocation.distanceTo(homeLocation)
                         val isNowInside = distance < 500f
-                        app.updateInsideHomeStatus(isNowInside) // Update UI instantly
+                        app.updateInsideHomeStatus(isNowInside)
                         Toast.makeText(context, "Home location updated.", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -315,7 +293,7 @@ fun HomeScreenWithNavigation() {
         ) {
             Column(modifier = Modifier.padding(paddingValues)) {
                 if (isInsideHome) {
-                    InsideZoneScreen()
+                    InsideZoneScreen(totalDailyUsage = totalDailyUsage)
                 } else {
                     OutsideZoneScreen()
                 }
@@ -325,18 +303,55 @@ fun HomeScreenWithNavigation() {
 }
 
 @Composable
-fun InsideZoneScreen(modifier: Modifier = Modifier) {
+fun InsideZoneScreen(modifier: Modifier = Modifier, totalDailyUsage: Long) {
+    val hours = TimeUnit.MILLISECONDS.toHours(totalDailyUsage)
+    val minutes = TimeUnit.MILLISECONDS.toMinutes(totalDailyUsage) % 60
+    val seconds = TimeUnit.MILLISECONDS.toSeconds(totalDailyUsage) % 60
+    val formattedTime = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+
     Column(
         modifier = modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("--- INSIDE ZONE ---", color = Color.Green, fontSize = 30.sp)
-        Spacer(modifier = Modifier.height(16.dp))
-        Text("Welcome Home!", style = MaterialTheme.typography.displayLarge)
-        Spacer(modifier = Modifier.height(16.dp))
-        Text("Your session will start automatically.", style = MaterialTheme.typography.bodyLarge)
+        Text("Screen Time Today", style = MaterialTheme.typography.headlineMedium)
+        Text(formattedTime, style = MaterialTheme.typography.displayLarge, fontSize = 80.sp)
+        Spacer(modifier = Modifier.height(32.dp))
+        Text("Welcome Home!", style = MaterialTheme.typography.headlineSmall)
+        Text("Your session is active.", style = MaterialTheme.typography.bodyLarge)
     }
+}
+
+private fun calculateTotalLeisureUsage(context: Context): Long {
+    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val pm = context.packageManager
+    val prefs = context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE)
+
+    val cal = Calendar.getInstance()
+    cal.set(Calendar.HOUR_OF_DAY, 0)
+    cal.set(Calendar.MINUTE, 0)
+    cal.set(Calendar.SECOND, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    val startTime = cal.timeInMillis
+    val endTime = System.currentTimeMillis()
+
+    val usageStats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+
+    var totalLeisureUsage = 0L
+    usageStats.forEach { stat ->
+        try {
+            val appInfo = pm.getApplicationInfo(stat.packageName, 0)
+            val prefKey = "app_label_${stat.packageName}"
+            val defaultLabel = com.nitish.still.inferLabel(appInfo)
+            val label = prefs.getString(prefKey, defaultLabel) ?: defaultLabel
+            if (label != LABEL_IMPORTANT) {
+                totalLeisureUsage += stat.totalTimeInForeground
+            }
+        } catch (e: PackageManager.NameNotFoundException) {
+            // App might have been uninstalled, ignore.
+        }
+    }
+    return totalLeisureUsage
 }
 
 
@@ -352,19 +367,8 @@ fun OutsideZoneScreen(modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("--- OUTSIDE ZONE ---", color = Color.Red, fontSize = 30.sp)
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "You’re currently outside the active area.",
-            style = MaterialTheme.typography.headlineMedium,
-            textAlign = TextAlign.Center
-        )
-        Text(
-            text = "The app features are temporarily paused.",
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 8.dp, bottom = 32.dp)
-        )
+        Text("You’re currently outside the active area.", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
+        Text("App features are paused.", style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp, bottom = 32.dp))
         Button(onClick = { context.startActivity(Intent(context, MapActivity::class.java)) }) {
             Text("View Active Zone")
         }
@@ -377,59 +381,42 @@ fun OutsideZoneScreen(modifier: Modifier = Modifier) {
                         val homeLon = (context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE)).getString("home_longitude", "0.0")?.toDoubleOrNull() ?: 0.0
 
                         if (homeLat != 0.0 && homeLon != 0.0) {
-                            val homeLocation = Location("Home").apply {
-                                latitude = homeLat
-                                longitude = homeLon
-                            }
-                            val distance = currentLocation.distanceTo(homeLocation) // This is in meters
+                            val homeLocation = Location("Home").apply { latitude = homeLat; longitude = homeLon }
+                            val distance = currentLocation.distanceTo(homeLocation)
                             val isNowInside = distance < 500f
-
                             app.updateInsideHomeStatus(isNowInside)
-
                             val message = if (isNowInside) "Location refreshed. You are inside the zone." else "Location refreshed. You are still outside the zone."
                             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-
                         } else {
                             Toast.makeText(context, "Home location not set.", Toast.LENGTH_SHORT).show()
                         }
                     } else {
-                         Toast.makeText(context, "Could not get current location. Please. Please try again.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Could not get current location. Please try again.", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
         }) {
             Text("Refresh Location")
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { context.startActivity(Intent(context, MapActivity::class.java)) }) {
-            Text("Change Zone")
-        }
     }
 }
-
 
 @SuppressLint("MissingPermission")
 private fun setupGeofence(context: Context) {
     val prefs = context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE)
-    val lat = prefs.getString("home_latitude", "0.0")?.toDoubleOrNull() ?: 0.0
-    val lon = prefs.getString("home_longitude", "0.0")?.toDoubleOrNull() ?: 0.0
+    val geofencingClient = LocationServices.getGeofencingClient(context)
 
-    if (lat == 0.0 || lon == 0.0) {
-        Log.w("Geofence", "Home location not set, cannot create geofence.")
+    val homeLat = prefs.getString("home_latitude", "0.0")?.toDoubleOrNull()
+    val homeLon = prefs.getString("home_longitude", "0.0")?.toDoubleOrNull()
+
+    if (homeLat == null || homeLon == null || homeLat == 0.0 || homeLon == 0.0) {
+        Log.w("Geofence", "Home location not set, cannot setup geofence.")
         return
     }
 
-    val geofencingClient = LocationServices.getGeofencingClient(context)
-    val geofencePendingIntent = PendingIntent.getBroadcast(
-        context,
-        0,
-        Intent(context, GeofenceBroadcastReceiver::class.java),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-    )
-
     val geofence = Geofence.Builder()
-        .setRequestId("HOME_GEOFENCE")
-        .setCircularRegion(lat, lon, 500f) // 500 meters radius
+        .setRequestId("home_geofence")
+        .setCircularRegion(homeLat, homeLon, 500f)
         .setExpirationDuration(Geofence.NEVER_EXPIRE)
         .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
         .build()
@@ -439,60 +426,22 @@ private fun setupGeofence(context: Context) {
         .addGeofence(geofence)
         .build()
 
-    geofencingClient.removeGeofences(geofencePendingIntent)?.run {
+    val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
+    val geofencePendingIntent = PendingIntent.getBroadcast(
+        context, 
+        0, 
+        intent, 
+        PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+    )
+
+    geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent).run {
         addOnSuccessListener {
-            Log.i("Geofence", "Old geofence removed successfully.")
-            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                return@addOnSuccessListener
-            }
-            geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent).run {
-                addOnSuccessListener {
-                    Log.i("Geofence", "New geofence added successfully.")
-                }
-                addOnFailureListener { e ->
-                    Log.e("Geofence", "Failed to add new geofence: ${e.message}")
-                }
-            }
+            Log.d("Geofence", "Geofence added successfully.")
+            Toast.makeText(context, "Home zone activated.", Toast.LENGTH_SHORT).show()
         }
-        addOnFailureListener { e ->
-            Log.e("Geofence", "Failed to remove old geofence: ${e.message}")
-            // Even if removal fails, try to add the new one
-            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                return@addOnFailureListener
-            }
-            geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent).run {
-                addOnSuccessListener {
-                    Log.i("Geofence", "Geofence added successfully (old one may not have been removed).")
-                }
-                addOnFailureListener { e2 ->
-                    Log.e("Geofence", "Failed to add geofence: ${e2.message}")
-                }
-            }
+        addOnFailureListener {
+            Log.e("Geofence", "Failed to add geofence: ${it.message}")
+            Toast.makeText(context, "Failed to activate home zone. Please ensure location is enabled.", Toast.LENGTH_LONG).show()
         }
-    }
-}
-
-
-@Preview(showBackground = true)
-@Composable
-fun HomeScreenPreview() {
-    StillTheme {
-        HomeScreenWithNavigation()
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun OutsideZoneScreenPreview() {
-    StillTheme {
-        OutsideZoneScreen()
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun InsideZoneScreenPreview() {
-    StillTheme {
-        InsideZoneScreen(modifier = Modifier)
     }
 }

@@ -3,59 +3,45 @@ package com.nitish.still
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
 
 class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
-    override fun onReceive(context: Context, intent: Intent) {
-        Log.e(TAG, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        Log.e(TAG, "!!! GEOFENCE BROADCAST RECEIVED !!!")
-        Log.e(TAG, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-
-        val geofencingEvent = GeofencingEvent.fromIntent(intent)
-        if (geofencingEvent == null) {
-            Log.e(TAG, "GeofencingEvent is null, cannot process.")
-            return
-        }
-
-        if (geofencingEvent.hasError()) {
-            Log.e(TAG, "GeofencingEvent has error: ${geofencingEvent.errorCode}")
-            return
-        }
-
-        val geofenceTransition = geofencingEvent.geofenceTransition
-        Log.i(TAG, "Geofence transition type: $geofenceTransition")
-
-        val app = context.applicationContext as StillApplication
-
-        if (geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER) {
-            Log.i(TAG, "Transition is ENTER. Setting isInsideHome to TRUE.")
-            app.updateInsideHomeStatus(true)
-
-            val serviceIntent = Intent(context, TimerService::class.java).apply {
-                putExtra(EXTRA_IS_INSIDE_HOME, true)
-            }
-            context.startForegroundService(serviceIntent)
-            Log.i(TAG, "Started TimerService.")
-
-        } else if (geofenceTransition == Geofence.GEOFENCE_TRANSITION_EXIT) {
-            Log.i(TAG, "Transition is EXIT. Setting isInsideHome to FALSE.")
-            app.updateInsideHomeStatus(false)
-
-            val serviceIntent = Intent(context, TimerService::class.java).apply {
-                putExtra(EXTRA_IS_INSIDE_HOME, false)
-            }
-            context.startForegroundService(serviceIntent) // Use startForegroundService to update the service state
-            Log.i(TAG, "Updated TimerService (stopping countdown).")
-        }
+    companion object {
+        const val EXTRA_IS_INSIDE_HOME = "is_inside_home"
     }
 
-    companion object {
-        private const val TAG = "GeofenceReceiver"
-        const val ACTION_GEOFENCE_EVENT = "com.nitish.still.ACTION_GEOFENCE_EVENT"
-        const val EXTRA_IS_INSIDE_HOME = "is_inside_home"
-        const val KEY_IS_INSIDE_HOME = "is_inside_home"
+    override fun onReceive(context: Context, intent: Intent) {
+        GeofencingEvent.fromIntent(intent)?.let { geofencingEvent ->
+            if (geofencingEvent.hasError()) {
+                Log.e("GeofenceReceiver", "Geofencing event has error: ${geofencingEvent.errorCode}")
+                return@let // Exit the let block
+            }
+
+            val geofenceTransition = geofencingEvent.geofenceTransition
+
+            if (geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER || geofenceTransition == Geofence.GEOFENCE_TRANSITION_EXIT) {
+                val isInsideHome = geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER
+                Log.d("GeofenceReceiver", "User is ${if (isInsideHome) "inside" else "outside"} home zone.")
+
+                // Update application state
+                (context.applicationContext as StillApplication).updateInsideHomeStatus(isInsideHome)
+
+                // Start the service to track usage
+                val serviceIntent = Intent(context, TimerService::class.java).apply {
+                    putExtra(EXTRA_IS_INSIDE_HOME, isInsideHome)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+            }
+        } ?: run {
+            Log.e("GeofenceReceiver", "Geofencing event is null. Intent may not be a valid geofencing intent.")
+        }
     }
 }
