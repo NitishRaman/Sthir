@@ -72,6 +72,13 @@ dependencies {
     implementation("com.google.maps.android:maps-compose:4.3.3")
     implementation("androidx.compose.material:material-icons-extended:1.6.7")
 
+    // Vico for charts
+    implementation("com.patrykandpatrick.vico:core:1.14.0")
+    implementation("com.patrykandpatrick.vico:compose:1.14.0")
+    implementation("com.patrykandpatrick.vico:compose-m3:1.14.0")
+
+    implementation("com.google.accompanist:accompanist-drawablepainter:0.32.0")
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)

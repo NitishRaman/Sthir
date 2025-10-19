@@ -115,3 +115,23 @@ fun isLeisureCategory(appInfo: ApplicationInfo, pm: PackageManager): Boolean {
     android.util.Log.d("SettingsDebug", "isLeisureCategory: default false for pkg=$pkg")
     return false
 }
+
+fun getTop5LeisureApps(context: android.content.Context): List<WeeklyAppUsage> {
+    val weeklyUsage = (0..6).flatMap { dayIndex ->
+        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, dayIndex - 6) }
+        getAppUsageForDay(context, cal).filter { isLeisureCategory(it.appInfo, context.packageManager) }
+    }
+
+    return weeklyUsage
+        .groupBy { it.appInfo.packageName }
+        .map { (packageName, usages) ->
+            WeeklyAppUsage(
+                packageName = packageName,
+                totalUsage = usages.sumOf { it.usageTimeMillis } / 7
+            )
+        }
+        .sortedByDescending { it.totalUsage }
+        .take(5)
+}
+
+data class WeeklyAppUsage(val packageName: String, val totalUsage: Long)

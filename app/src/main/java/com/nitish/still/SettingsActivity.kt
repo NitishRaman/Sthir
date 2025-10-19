@@ -449,120 +449,6 @@ fun BarChart(
     }
 }
 
-
-
-fun getDailyUsage(context: Context): List<DailyUsage> {
-    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-    val pm = context.packageManager
-
-    // Start at midnight 6 days ago (oldest day)
-    val today = Calendar.getInstance()
-    val startCal = Calendar.getInstance().apply {
-        timeInMillis = today.timeInMillis
-        add(Calendar.DAY_OF_YEAR, -6)
-        set(Calendar.HOUR_OF_DAY, 0)
-        set(Calendar.MINUTE, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }
-    val result = mutableListOf<DailyUsage>()
-    val dayFormat = SimpleDateFormat("EEE", Locale.ENGLISH)
-
-    val iterCal = Calendar.getInstance().apply { timeInMillis = startCal.timeInMillis }
-
-    for (i in 0..6) {
-        val dayStart = iterCal.timeInMillis
-
-        // build day end at 23:59:59.999 for that day
-        val endCal = Calendar.getInstance().apply {
-            timeInMillis = dayStart
-            set(Calendar.HOUR_OF_DAY, 23)
-            set(Calendar.MINUTE, 59)
-            set(Calendar.SECOND, 59)
-            set(Calendar.MILLISECOND, 999)
-        }
-        val dayEnd = endCal.timeInMillis
-
-        var sumForDay = 0L
-
-        try {
-            // Preferred: queryAndAggregateUsageStats(dayStart, dayEnd) if available
-            // This returns Map<String, UsageStats> aggregated for the range
-            val aggregated: Map<String, *>? = try {
-                @Suppress("UNCHECKED_CAST")
-                usageStatsManager.queryAndAggregateUsageStats(dayStart, dayEnd) as? Map<String, android.app.usage.UsageStats>
-            } catch (_: Throwable) {
-                null
-            }
-
-            if (aggregated != null && aggregated.isNotEmpty()) {
-                aggregated.forEach { (pkg, usageObj) ->
-                    if (usageObj !is android.app.usage.UsageStats) return@forEach
-                    try {
-                        val ai = pm.getApplicationInfo(pkg, 0)
-                        val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
-                                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
-                        if (isSystemCore) return@forEach
-
-                        if (isLeisureCategory(ai, pm)) {
-                            sumForDay += usageObj.totalTimeInForeground
-                        }
-                    } catch (_: PackageManager.NameNotFoundException) {
-                        // package not visible – skip
-                    }
-                }
-            } else {
-                // Fallback: queryUsageStats for the day range and sum returned entries
-                val dailyStats =
-                    usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, dayStart, dayEnd)
-                dailyStats.forEach { us ->
-                    val pkg = us.packageName ?: return@forEach
-                    try {
-                        val ai = pm.getApplicationInfo(pkg, 0)
-                        val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
-                                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
-                        if (isSystemCore) return@forEach
-
-                        if (isLeisureCategory(ai, pm)) {
-                            sumForDay += us.totalTimeInForeground
-                        }
-                    } catch (_: PackageManager.NameNotFoundException) {
-                        // skip
-                    } catch (t: Throwable) {
-                        Log.w("SettingsDebug", "getDailyUsage (fallback) error for $pkg: ${t.message}")
-                    }
-                }
-            }
-        } catch (t: Throwable) {
-            Log.w("SettingsDebug", "getDailyUsage: error querying day range ${Date(dayStart)} - ${Date(dayEnd)}: ${t.message}")
-        }
-
-        // label "Today" when it matches current day
-        val dayLabel = if (iterCal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR)
-            && iterCal.get(Calendar.YEAR) == today.get(Calendar.YEAR)
-        ) {
-            "Today"
-        } else {
-            dayFormat.format(iterCal.time).take(3)
-        }
-
-        Log.d("SettingsDebug", "getDailyUsage: day=${dayLabel} start=${Date(dayStart)} end=${Date(dayEnd)} leisureMillis=$sumForDay")
-
-        result.add(DailyUsage(dayLabel, sumForDay))
-        iterCal.add(Calendar.DAY_OF_YEAR, 1)
-    }
-
-    // result is oldest -> newest (index 6 == Today)
-    Log.d("SettingsDebug", "getDailyUsage (final): ${result.map { "${it.day}:${it.usageMillis}" }}")
-    return result
-}
-
-
-
-
-
-
-
 fun getAppUsageForDay(context: Context, calendar: Calendar): List<AppUsageInfo> {
     val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val pm = context.packageManager
@@ -817,4 +703,109 @@ fun SettingsScreenPreview() {
     StillTheme {
         SettingsScreen(isOnboarding = true)
     }
+}
+fun getDailyUsage(context: Context): List<DailyUsage> {
+    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val pm = context.packageManager
+
+    // Start at midnight 6 days ago (oldest day)
+    val today = Calendar.getInstance()
+    val startCal = Calendar.getInstance().apply {
+        timeInMillis = today.timeInMillis
+        add(Calendar.DAY_OF_YEAR, -6)
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val result = mutableListOf<DailyUsage>()
+    val dayFormat = SimpleDateFormat("EEE", Locale.ENGLISH)
+
+    val iterCal = Calendar.getInstance().apply { timeInMillis = startCal.timeInMillis }
+
+    for (i in 0..6) {
+        val dayStart = iterCal.timeInMillis
+
+        // build day end at 23:59:59.999 for that day
+        val endCal = Calendar.getInstance().apply {
+            timeInMillis = dayStart
+            set(Calendar.HOUR_OF_DAY, 23)
+            set(Calendar.MINUTE, 59)
+            set(Calendar.SECOND, 59)
+            set(Calendar.MILLISECOND, 999)
+        }
+        val dayEnd = endCal.timeInMillis
+
+        var sumForDay = 0L
+
+        try {
+            // Preferred: queryAndAggregateUsageStats(dayStart, dayEnd) if available
+            // This returns Map<String, UsageStats> aggregated for the range
+            val aggregated: Map<String, *>? = try {
+                @Suppress("UNCHECKED_CAST")
+                usageStatsManager.queryAndAggregateUsageStats(dayStart, dayEnd) as? Map<String, android.app.usage.UsageStats>
+            } catch (_: Throwable) {
+                null
+            }
+
+            if (aggregated != null && aggregated.isNotEmpty()) {
+                aggregated.forEach { (pkg, usageObj) ->
+                    if (usageObj !is android.app.usage.UsageStats) return@forEach
+                    try {
+                        val ai = pm.getApplicationInfo(pkg, 0)
+                        val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                        if (isSystemCore) return@forEach
+
+                        if (isLeisureCategory(ai, pm)) {
+                            sumForDay += usageObj.totalTimeInForeground
+                        }
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        // package not visible – skip
+                    }
+                }
+            } else {
+                // Fallback: queryUsageStats for the day range and sum returned entries
+                val dailyStats =
+                    usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, dayStart, dayEnd)
+                dailyStats.forEach { us ->
+                    val pkg = us.packageName ?: return@forEach
+                    try {
+                        val ai = pm.getApplicationInfo(pkg, 0)
+                        val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                                (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                        if (isSystemCore) return@forEach
+
+                        if (isLeisureCategory(ai, pm)) {
+                            sumForDay += us.totalTimeInForeground
+                        }
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        // skip
+                    } catch (t: Throwable) {
+                        Log.w("SettingsDebug", "getDailyUsage (fallback) error for $pkg: ${t.message}")
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w("SettingsDebug", "getDailyUsage: error querying day range ${Date(dayStart)} - ${Date(dayEnd)}: ${t.message}")
+        }
+
+        // label "Today" when it matches current day
+        val dayLabel = if (iterCal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR)
+            && iterCal.get(Calendar.YEAR) == today.get(Calendar.YEAR)
+        ) {
+            "Today"
+        } else {
+            dayFormat.format(iterCal.time).take(3)
+        }
+
+        Log.d("SettingsDebug", "getDailyUsage: day=${dayLabel} start=${Date(dayStart)} end=${Date(dayEnd)} leisureMillis=$sumForDay")
+
+        result.add(DailyUsage(dayLabel, sumForDay))
+        iterCal.add(Calendar.DAY_OF_YEAR, 1)
+    }
+
+    // result is oldest -> newest (index 6 == Today)
+    Log.d("SettingsDebug", "getDailyUsage (final): ${result.map { "${it.day}:${it.usageMillis}" }}")
+    return result
 }

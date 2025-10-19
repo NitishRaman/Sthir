@@ -4,11 +4,11 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.PendingIntent
-import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.location.Location
 import android.os.Build
 import android.os.Bundle
@@ -19,6 +19,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
@@ -26,6 +27,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -36,11 +40,24 @@ import androidx.core.app.ActivityCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
+import com.google.accompanist.drawablepainter.rememberDrawablePainter
 import com.nitish.still.ui.theme.StillTheme
+import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
+import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
+import com.patrykandpatrick.vico.compose.chart.Chart
+import com.patrykandpatrick.vico.compose.chart.line.lineChart
+import com.patrykandpatrick.vico.compose.component.textComponent
+import com.patrykandpatrick.vico.compose.dimensions.dimensionsOf
+import com.patrykandpatrick.vico.core.axis.AxisPosition
+import com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter
+import com.patrykandpatrick.vico.core.component.shape.LineComponent
+import com.patrykandpatrick.vico.core.entry.FloatEntry
+import com.patrykandpatrick.vico.core.entry.entryModelOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Calendar
 import java.util.concurrent.TimeUnit
+import android.app.usage.UsageStatsManager
+import java.util.Calendar
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -158,7 +175,7 @@ fun LocationPermissionScreen(onFinished: () -> Unit) {
                 mapLauncher.launch(Intent(context, MapActivity::class.java))
             }
         } else {
-            Toast.makeText(context, "'Allow all the time' is required for geofencing.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "\'Allow all the time\' is required for geofencing.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -185,7 +202,7 @@ fun LocationPermissionScreen(onFinished: () -> Unit) {
             Text(text = "Let’s begin by granting permissions.", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Still requires 3 permissions to work correctly:\n1. Location (to set your home zone)\n2. Background Location ('Allow all the time')\n3. Physical Activity (for battery saving)",
+                text = "Still requires 3 permissions to work correctly:\\n1. Location (to set your home zone)\\n2. Background Location (\'Allow all the time\')\\n3. Physical Activity (for battery saving)",
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(bottom = 32.dp)
@@ -226,11 +243,15 @@ fun HomeScreenWithNavigation() {
     val app = context.applicationContext as StillApplication
     val isInsideHome by app.isInsideHome.collectAsState()
     var totalDailyUsage by remember { mutableStateOf(0L) }
+    var weeklyUsage by remember { mutableStateOf<List<DailyUsage>>(emptyList()) }
+    var top5Apps by remember { mutableStateOf<List<WeeklyAppUsage>>(emptyList()) }
 
     LaunchedEffect(isInsideHome) {
         if (isInsideHome) {
             while (true) {
                 totalDailyUsage = calculateTotalLeisureUsage(context)
+                weeklyUsage = getDailyUsage(context)
+                top5Apps = getTop5LeisureApps(context)
                 delay(1000L) // updates every second
             }
         }
@@ -293,7 +314,11 @@ fun HomeScreenWithNavigation() {
         ) {
             Column(modifier = Modifier.padding(paddingValues)) {
                 if (isInsideHome) {
-                    InsideZoneScreen(totalDailyUsage = totalDailyUsage)
+                    InsideZoneScreen(
+                        totalDailyUsage = totalDailyUsage,
+                        weeklyUsage = weeklyUsage,
+                        top5Apps = top5Apps
+                    )
                 } else {
                     OutsideZoneScreen()
                 }
@@ -303,23 +328,125 @@ fun HomeScreenWithNavigation() {
 }
 
 @Composable
-fun InsideZoneScreen(modifier: Modifier = Modifier, totalDailyUsage: Long) {
+fun InsideZoneScreen(
+    modifier: Modifier = Modifier,
+    totalDailyUsage: Long,
+    weeklyUsage: List<DailyUsage>,
+    top5Apps: List<WeeklyAppUsage>
+) {
     val hours = TimeUnit.MILLISECONDS.toHours(totalDailyUsage)
     val minutes = TimeUnit.MILLISECONDS.toMinutes(totalDailyUsage) % 60
     val seconds = TimeUnit.MILLISECONDS.toSeconds(totalDailyUsage) % 60
     val formattedTime = String.format("%02d:%02d:%02d", hours, minutes, seconds)
 
     Column(
-        modifier = modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = modifier.fillMaxSize().padding(16.dp),
     ) {
-        Text("Screen Time Today", style = MaterialTheme.typography.headlineMedium)
-        Text(formattedTime, style = MaterialTheme.typography.displayLarge, fontSize = 80.sp)
-        Spacer(modifier = Modifier.height(32.dp))
-        Text("Welcome Home!", style = MaterialTheme.typography.headlineSmall)
-        Text("Your session is active.", style = MaterialTheme.typography.bodyLarge)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Screen Time Today", style = MaterialTheme.typography.headlineMedium)
+                Text(formattedTime, style = MaterialTheme.typography.displayLarge, fontSize = 40.sp)
+            }
+            WeeklyTrendChart(weeklyUsage = weeklyUsage)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Top5AppsList(top5Apps = top5Apps)
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("Welcome Home!", style = MaterialTheme.typography.headlineSmall)
+            Text("Your session is active.", style = MaterialTheme.typography.bodyLarge)
+        }
     }
+}
+
+@Composable
+fun Top5AppsList(top5Apps: List<WeeklyAppUsage>) {
+    Column {
+        Text("Top 5 Weekly Apps", style = MaterialTheme.typography.headlineSmall)
+        Spacer(modifier = Modifier.height(8.dp))
+        top5Apps.forEach { appUsage ->
+            val icon = getAppIcon(LocalContext.current, appUsage.packageName)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (icon != null) {
+                    Image(painter = rememberDrawablePainter(drawable = icon), contentDescription = null, modifier = Modifier.size(40.dp))
+                } else {
+                    Box(modifier = Modifier.size(40.dp).background(Color.Gray))
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(modifier = Modifier.weight(1f).height(20.dp).background(Color.LightGray)) {
+                    Box(modifier = Modifier.fillMaxWidth(appUsage.totalUsage.toFloat() / (top5Apps.firstOrNull()?.totalUsage?.toFloat() ?: 1f)).background(MaterialTheme.colorScheme.primary).height(20.dp))
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+fun WeeklyTrendChart(weeklyUsage: List<DailyUsage>) {
+    val chartModel = entryModelOf(weeklyUsage.mapIndexed { index, dailyUsage -> FloatEntry(index.toFloat(), (dailyUsage.usageMillis / (1000 * 60)).toFloat()) })
+    val startAxisValueFormatter = AxisValueFormatter<AxisPosition.Vertical.Start> { value, _ ->
+        val hours = (value / 60).toInt()
+        val minutes = (value % 60).toInt()
+        when {
+            hours > 0 -> "${hours}h"
+            minutes > 0 -> "${minutes}m"
+            else -> "0m"
+        }
+    }
+
+    val bottomAxisValueFormatter = AxisValueFormatter<AxisPosition.Horizontal.Bottom> { value, _ ->
+        weeklyUsage.getOrNull(value.toInt())?.day ?: ""
+    }
+
+    Chart(
+        chart = lineChart(),
+        model = chartModel,
+        startAxis = rememberStartAxis(
+            valueFormatter = startAxisValueFormatter,
+            label = textComponent(
+                color = MaterialTheme.colorScheme.onSurface,
+                textSize = 10.sp,
+                typeface = Typeface.MONOSPACE
+            ),
+            axis = LineComponent(
+                color = MaterialTheme.colorScheme.onSurface.toArgb(),
+                thicknessDp = 1f,
+            ),
+            tick = LineComponent(
+                color = MaterialTheme.colorScheme.onSurface.toArgb(),
+                thicknessDp = 0.5f
+            ),
+            guideline = LineComponent(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f).toArgb(),
+                thicknessDp = 0.5f
+            )
+        ),
+        bottomAxis = rememberBottomAxis(
+            valueFormatter = bottomAxisValueFormatter,
+            label = textComponent(
+                color = MaterialTheme.colorScheme.onSurface,
+                textSize = 10.sp,
+                typeface = Typeface.MONOSPACE,
+                lineCount = 1,
+                padding = dimensionsOf(horizontal = 4.dp)
+            ),
+            axis = LineComponent(
+                color = MaterialTheme.colorScheme.onSurface.toArgb(),
+                thicknessDp = 1f
+            )
+        ),
+        modifier = Modifier.height(120.dp)
+    )
 }
 
 private fun calculateTotalLeisureUsage(context: Context): Long {
@@ -342,7 +469,7 @@ private fun calculateTotalLeisureUsage(context: Context): Long {
         try {
             val appInfo = pm.getApplicationInfo(stat.packageName, 0)
             val prefKey = "app_label_${stat.packageName}"
-            val defaultLabel = com.nitish.still.inferLabel(appInfo)
+            val defaultLabel = inferLabel(appInfo)
             val label = prefs.getString(prefKey, defaultLabel) ?: defaultLabel
             if (label != LABEL_IMPORTANT) {
                 totalLeisureUsage += stat.totalTimeInForeground
@@ -428,9 +555,9 @@ private fun setupGeofence(context: Context) {
 
     val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
     val geofencePendingIntent = PendingIntent.getBroadcast(
-        context, 
-        0, 
-        intent, 
+        context,
+        0,
+        intent,
         PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
     )
 
@@ -443,5 +570,13 @@ private fun setupGeofence(context: Context) {
             Log.e("Geofence", "Failed to add geofence: ${it.message}")
             Toast.makeText(context, "Failed to activate home zone. Please ensure location is enabled.", Toast.LENGTH_LONG).show()
         }
+    }
+}
+
+fun getAppIcon(context: Context, packageName: String): Drawable? {
+    return try {
+        context.packageManager.getApplicationIcon(packageName)
+    } catch (e: PackageManager.NameNotFoundException) {
+        null
     }
 }
