@@ -1,80 +1,32 @@
 package com.nitish.still
 
+import android.app.usage.UsageStats
+import android.app.usage.UsageStatsManager
+import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import java.util.*
+import kotlin.collections.LinkedHashMap
 
 const val LABEL_LEISURE = "Leisure"
 const val LABEL_IMPORTANT = "Important"
 const val LABEL_UNLABELED = "Unlabeled"
 
-/**
- * Final leisure classifier for Sthir.
- * Marks apps as "leisure" if they belong to OTT, streaming, gaming, social media, shopping, or music.
- * Ignores banking, productivity, system, education, and utility apps.
- */
 fun isLeisureCategory(appInfo: ApplicationInfo, pm: PackageManager): Boolean {
     val pkg = (appInfo.packageName ?: "").lowercase(Locale.getDefault())
 
-    // 🚫 System / Productivity / Bank / Utility blacklist
-    val blacklistPrefixes = listOf(
-        "com.android.",
-        "android.",
-        "com.google.android.gms",
-        "com.google.android.gsf",
-        "com.google.android.inputmethod", // Gboard
-        "com.google.android.apps.docs", // Drive
-        "com.google.android.apps.work", // Workspace
-        "com.google.android.calendar",
-        "com.google.android.contacts",
-        "com.google.android.deskclock",
-        "com.google.android.keep",
-        "com.google.android.apps.nexuslauncher",
-        "com.google.android.apps.maps",
-        "com.google.android.apps.photos",
-        "com.google.android.apps.translate",
-        "com.google.android.apps.tachyon", // Duo
-        "com.microsoft.office",
-        "com.microsoft.teams",
-        "com.slack",
-        "com.skype",
-        "com.google.android.gm", // Gmail
-        "com.google.android.apps.meetings",
-        "com.google.android.apps.classroom",
-        "com.android.vending",
-        "com.sec.android",
-        "com.samsung.",
-        "com.motorola.",
-        "com.miui.",
-        "com.coloros.",
-        "com.huawei.",
-        "com.oneplus.",
-        "com.realme.",
-        "com.paytm",
-        "com.phonepe.app",
-        "net.one97.paytm",
-        "com.google.android.apps.walletnfcrel",
-        "com.mobikwik_new",
-        "com.axis.mobile",
-        "com.hdfcbank.mobilebanking",
-        "com.icicibank.imobile",
-        "com.sbi.SBIFreedomPlus",
-        "com.citi.citimobile",
-        "com.kotak.neobank",
-        "com.pnb.mobile",
-        "com.unionbank.ecommerce",
-        "in.co.bankofbaroda.mconnect",
-        "com.boi.mpassbook",
-        "com.dbs.in.digitalbank"
+    val blacklistPrefixes = setOf(
+        "com.android.", "android.", "com.google.android.gms", "com.google.android.gsf",
+        "com.google.android.inputmethod", "com.microsoft.office", "com.microsoft.teams",
+        "com.slack", "com.skype", "com.android.vending",
+        "com.sec.android", "com.samsung.", "com.motorola.", "com.miui.", "com.coloros.",
+        "com.huawei.", "com.oneplus.", "com.realme.", "com.paytm", "com.phonepe.app",
+        "net.one97.paytm"
     )
 
-    if (blacklistPrefixes.any { pkg.startsWith(it) }) {
-        android.util.Log.d("SettingsDebug", "isLeisureCategory: blacklisted pkg=$pkg")
-        return false
-    }
+    if (blacklistPrefixes.any { pkg.startsWith(it) }) return false
 
-    // 🎮 Trust Android system category if available
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         when (appInfo.category) {
             ApplicationInfo.CATEGORY_GAME,
@@ -85,90 +37,91 @@ fun isLeisureCategory(appInfo: ApplicationInfo, pm: PackageManager): Boolean {
         }
     }
 
-    // 🎬🎧 Social + OTT + Gaming + Shopping + Music keywords
     val leisureKeywords = listOf(
-        // 🎬 OTT / Video Streaming
-        "youtube", "ytmusic", "netflix", "hotstar", "disney", "primevideo",
-        "amazonvideo", "sonyliv", "zee5", "mxplayer", "voot", "altbalaji",
-        "jiosaavn", "erosnow", "twitch", "crunchyroll", "animelab", "plex",
-        "jiocinema", "sling", "hulu", "pluto", "ott", "watch", "player",
-
-        // 🎵 Music / Audio / Podcasts
-        "spotify", "gaana", "wynk", "saavn", "soundcloud", "music", "radio",
-        "deezer", "audible", "audiobooks", "podcast", "pandora", "tunein",
-        "stitcher", "fm", "mixcloud",
-
-        // 💬 Social Media / Messaging
-        "whatsapp", "instagram", "facebook", "messenger", "snapchat",
-        "telegram", "twitter", "x.", "threads", "discord", "reddit",
-        "tiktok", "wechat", "line", "signal", "clubhouse", "truthsocial",
-        "pinterest", "tumblr", "bereal", "quora", "bluesky",
-
-        // 🛍️ Shopping / Lifestyle
-        "amazon", "flipkart", "myntra", "ajio", "meesho", "snapdeal",
-        "nykaa", "tatacliq", "bigbasket", "jiomart", "blinkit", "grofers",
-        "zara", "shein", "h&m", "shopping", "shopee", "ebay", "etsy",
-        "lenskart", "bewakoof", "decathlon", "1mg", "pharmeasy",
-
-        // 🎮 Gaming
-        "game", "games", "pubg", "bgmi", "freefire", "callofduty",
-        "clashofclans", "clashroyale", "subwaysurf", "templerun", "8ball",
-        "roblox", "minecraft", "pokemon", "amongus", "fortnite", "ludo",
-        "playstation", "xbox", "epicgames", "steam",
-
-        // ❤️ Dating / Lifestyle / Fun
-        "tinder", "bumble", "okcupid", "hinge", "badoo", "happn", "tan tan",
-        "woo", "cupid", "iris", "coffeemeetsbagel", "grindr", "jeevansathi",
-        "shaadi", "trulymadly",
-
-        // 📺 Short Video / Entertainment
-        "reels", "shorts", "moj", "takatak", "roposo", "chingari", "josh",
-        "trell", "boloindya", "mx.takatak", "mxtakatak",
-
-        // 📰 News / Fun
-        "inshorts", "dailyhunt", "buzzfeed", "9gag", "funny", "memes"
+        "youtube", "ytmusic", "netflix", "hotstar", "disney", "primevideo", "amazonvideo",
+        "sonyliv", "zee5", "mxplayer", "twitch", "crunchyroll", "plex",
+        "spotify", "gaana", "wynk", "soundcloud", "deezer", "audible", "podcast",
+        "whatsapp", "instagram", "facebook", "snapchat", "telegram", "reddit", "tiktok",
+        "twitter", "discord", "tinder", "bumble", "flipkart", "amazon", "myntra",
+        "pubg", "freefire", "roblox", "minecraft", "fortnite", "clash",
+        "reels", "shorts", "moj", "takatak", "josh", "9gag", "memes"
     )
 
-    if (leisureKeywords.any { pkg.contains(it) }) {
-        android.util.Log.d("SettingsDebug", "isLeisureCategory: pkg match leisure pkg=$pkg")
-        return true
-    }
+    // Prefer matching against package name using keywords that are at least length 4 to reduce false positives.
+    if (leisureKeywords.any { it.length >= 4 && pkg.contains(it) }) return true
 
-    // 🏷️ Last check — app label text
     try {
         val label = pm.getApplicationLabel(appInfo).toString().lowercase(Locale.getDefault())
-        if (leisureKeywords.any { label.contains(it) }) {
-            android.util.Log.d("SettingsDebug", "isLeisureCategory: label matched leisure pkg=$pkg label=$label")
-            return true
-        }
-    } catch (t: Throwable) {
-        android.util.Log.w("SettingsDebug", "isLeisureCategory: label read failed for pkg=$pkg ${t.message}")
+        if (leisureKeywords.any { label.contains(it) }) return true
+    } catch (_: Throwable) {
     }
 
     return false
 }
 
-/**
- * Returns top 5 leisure apps based on usage stats over the past 7 days.
- */
-fun getTop5LeisureApps(context: android.content.Context): List<WeeklyAppUsage> {
-    val weeklyUsage = (0..6).flatMap { dayIndex ->
-        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, dayIndex - 6) }
-        getAppUsageForDay(context, cal).filter {
-            isLeisureCategory(it.appInfo, context.packageManager)
+
+fun getTop5LeisureApps(context: Context): List<WeeklyAppUsage> {
+    val pm = context.packageManager
+    val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+        ?: return emptyList()
+
+    val now = System.currentTimeMillis()
+    val calStart = Calendar.getInstance().apply {
+        timeInMillis = now
+        add(Calendar.DAY_OF_YEAR, -6)
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }
+    val startTime = calStart.timeInMillis
+    val endTime = now
+
+    val totals = LinkedHashMap<String, Long>()
+
+    try {
+        val aggregated = try {
+            @Suppress("UNCHECKED_CAST")
+            usageStatsManager.queryAndAggregateUsageStats(startTime, endTime) as? Map<String, UsageStats>
+        } catch (_: Throwable) {
+            null
         }
+
+        if (aggregated != null && aggregated.isNotEmpty()) {
+            for ((pkg, us) in aggregated) {
+                if (pkg.isNullOrBlank()) continue
+                try {
+                    val ai = pm.getApplicationInfo(pkg, 0)
+                    val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                            (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                    if (isSystemCore) continue
+                    if (isLeisureCategory(ai, pm)) {
+                        totals[pkg] = (totals[pkg] ?: 0L) + (us?.totalTimeInForeground ?: 0L)
+                    }
+                } catch (_: PackageManager.NameNotFoundException) {
+                }
+            }
+        } else {
+            val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+            for (us in stats) {
+                val pkg = us.packageName ?: continue
+                try {
+                    val ai = pm.getApplicationInfo(pkg, 0)
+                    val isSystemCore = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                            (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                    if (isSystemCore) continue
+                    if (isLeisureCategory(ai, pm)) {
+                        totals[pkg] = (totals[pkg] ?: 0L) + us.totalTimeInForeground
+                    }
+                } catch (_: PackageManager.NameNotFoundException) {
+                }
+            }
+        }
+    } catch (_: SecurityException) {
+        return emptyList()
+    } catch (_: Throwable) {
+        return emptyList()
     }
 
-    return weeklyUsage
-        .groupBy { it.appInfo.packageName }
-        .map { (packageName, usages) ->
-            WeeklyAppUsage(
-                packageName = packageName,
-                totalUsage = usages.sumOf { it.usageTimeMillis } / 7
-            )
-        }
-        .sortedByDescending { it.totalUsage }
+    return totals.entries
+        .sortedByDescending { it.value }
         .take(5)
+        .map { WeeklyAppUsage(it.key, it.value) }
 }
-
-data class WeeklyAppUsage(val packageName: String, val totalUsage: Long)

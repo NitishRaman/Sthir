@@ -43,6 +43,9 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
 import android.util.Log
+import android.widget.Toast
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.platform.LocalDensity
 import com.nitish.still.isLeisureCategory
 import com.nitish.still.LABEL_LEISURE
@@ -56,7 +59,6 @@ data class AppUsageInfo(
     val usageTimeMillis: Long,
 )
 
-data class DailyUsage(val day: String, val usageMillis: Long)
 
 data class TimerPreset(
     val name: String,
@@ -159,9 +161,9 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
         hasPermission = hasUsageStatsPermission(context)
     }
 
-    var selectedPresetName by remember { mutableStateOf(prefs.getString("selected_preset", "Pomodoro")) }
+    var selectedPresetName by remember { mutableStateOf(prefs.getString("selected_preset", "Pomodoro") ?: "Pomodoro") }
     var customActivity by remember { mutableStateOf(prefs.getInt("work_interval", 45).toString()) }
-    var customBreak by remember { mutableStateOf((prefs.getInt("break_interval", 300) / 60).toString()) }
+    var customBreak by remember { mutableStateOf(prefs.getInt("break_interval", 300).toString()) }
 
     var selectedDayIndex by remember { mutableStateOf(6) } // 0-6, where 6 is today
     var refreshTrigger by remember { mutableStateOf(0) } // Used to refresh the app list
@@ -272,24 +274,35 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
                             value = customActivity,
                             onValueChange = {
                                 customActivity = it
+                                // work_interval is stored as minutes, keep that unchanged
                                 prefs.edit().putInt("work_interval", it.toIntOrNull() ?: 45).apply()
+                                // mark preset as custom in prefs
+                                prefs.edit().putString("selected_preset", "Custom Rhythm").apply()
+                                selectedPresetName = "Custom Rhythm"
                             },
                             label = { Text("Custom Activity (minutes)") },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         TextField(
                             value = customBreak,
                             onValueChange = {
                                 customBreak = it
-                                prefs.edit().putInt("break_interval", (it.toIntOrNull() ?: 5) * 60).apply()
+                                // store break_interval directly in seconds (no *60)
+                                prefs.edit().putInt("break_interval", it.toIntOrNull() ?: 300).apply()
+                                // mark preset as custom in prefs
+                                prefs.edit().putString("selected_preset", "Custom Rhythm").apply()
+                                selectedPresetName = "Custom Rhythm"
                             },
-                            label = { Text("Custom Break (minutes)") },
-                            modifier = Modifier.fillMaxWidth()
+                            label = { Text("Custom Break (seconds)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                         )
                     }
                 }
             }
+
 
             item { Divider(modifier = Modifier.padding(vertical = 16.dp)) }
 
@@ -355,6 +368,7 @@ fun SettingsScreen(modifier: Modifier = Modifier, isOnboarding: Boolean) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(text = "To show screen time data, please grant access in system settings.")
                             Spacer(modifier = Modifier.height(16.dp))
+                            Toast.makeText(context, "Open 'Usage access' and enable permission for Still (search for \"Still\")", Toast.LENGTH_LONG).show()
                             Button(onClick = {
                                 val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
                                 usageSettingsLauncher.launch(intent)

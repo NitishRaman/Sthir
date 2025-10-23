@@ -16,7 +16,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission"/>
+
 
     <!-- Needed to restart/auto-start after device boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -169,15 +170,24 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />
+        <activity android:name=".CameraCaptureActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".BreakPromptActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Still" />
 
         <!-- Geofence receiver: keep exported=true so PendingIntent broadcasts reach it.
              (Your GeofenceBroadcastReceiver.kt will receive geofence transitions.) -->
         <receiver
             android:name=".GeofenceBroadcastReceiver"
             android:exported="true">
-            <!-- optional intent-filter; geofence uses explicit PendingIntent usually
-                 but keeping an empty filter is fine. -->
+            <intent-filter>
+                <action android:name="com.nitish.still.GEOFENCE_EVENT" />
+            </intent-filter>
         </receiver>
+
 
         <!-- Boot receiver: will receive BOOT_COMPLETED and start your TimerService -->
         <receiver

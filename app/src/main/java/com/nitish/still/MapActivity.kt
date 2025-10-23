@@ -57,6 +57,8 @@ import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.nitish.still.ui.theme.StillTheme
 import kotlinx.coroutines.launch
+import com.nitish.still.GeofenceConstants.GEOFENCE_ID
+import com.nitish.still.GeofenceConstants.GEOFENCE_INTENT_ACTION
 
 class MapActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -199,22 +201,24 @@ fun SelectLocationScreen() {
 }
 
 private fun updateGeofence(context: Context, geofencingClient: GeofencingClient, location: LatLng) {
-    val geofenceId = "HOME_GEOFENCE"
+    val geofenceId = GEOFENCE_ID
+    val pendingIntent = GeofenceConstants.createGeofencePendingIntent(context)
 
-    geofencingClient.removeGeofences(listOf(geofenceId)).run {
+
+    geofencingClient.removeGeofences(pendingIntent).run {
         addOnSuccessListener {
             Log.i("Geofence", "Old geofence removed successfully.")
-            addGeofence(context, geofencingClient, location, geofenceId)
+            addGeofence(context, geofencingClient, location, geofenceId, pendingIntent)
         }
         addOnFailureListener {
             Log.e("Geofence", "Failed to remove old geofence: ${it.message}")
-            addGeofence(context, geofencingClient, location, geofenceId)
+            addGeofence(context, geofencingClient, location, geofenceId, pendingIntent)
         }
     }
 }
 
 @SuppressLint("MissingPermission")
-private fun addGeofence(context: Context, geofencingClient: GeofencingClient, location: LatLng, geofenceId: String) {
+private fun addGeofence(context: Context, geofencingClient: GeofencingClient, location: LatLng, geofenceId: String, pendingIntent: PendingIntent) {
     val fineLocationPermissionGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     val backgroundLocationPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -223,10 +227,7 @@ private fun addGeofence(context: Context, geofencingClient: GeofencingClient, lo
     }
 
     if (!fineLocationPermissionGranted || !backgroundLocationPermissionGranted) {
-        var errorMessage = "Cannot add geofence. Missing permissions:"
-        if (!fineLocationPermissionGranted) errorMessage += "\n- Fine Location"
-        if (!backgroundLocationPermissionGranted) errorMessage += "\n- Background Location"
-        Log.e("Geofence", errorMessage)
+        Log.e("Geofence", "Cannot add geofence. Missing permissions: fine=$fineLocationPermissionGranted background=$backgroundLocationPermissionGranted")
         Toast.makeText(context, "Cannot update location. Missing permissions.", Toast.LENGTH_LONG).show()
         return
     }
@@ -243,19 +244,26 @@ private fun addGeofence(context: Context, geofencingClient: GeofencingClient, lo
         .addGeofence(geofence)
         .build()
 
-    val intent = Intent(context, GeofenceBroadcastReceiver::class.java).apply {
-        `package` = context.packageName
-    }
-    val pendingIntent = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-
-    geofencingClient.addGeofences(geofencingRequest, pendingIntent)?.run {
+    geofencingClient.addGeofences(geofencingRequest, pendingIntent).run {
         addOnSuccessListener {
-            Log.i("Geofence", "New geofence added successfully.")
+            Log.i("Geofence", "New geofence added successfully: id=$geofenceId")
+            val fused = LocationServices.getFusedLocationProviderClient(context)
+            fused.lastLocation.addOnSuccessListener { loc ->
+                if (loc != null) {
+                    val dist = FloatArray(1)
+                    android.location.Location.distanceBetween(location.latitude, location.longitude, loc.latitude, loc.longitude, dist)
+                    val isInside = dist[0] < 500f
+                    (context.applicationContext as? StillApplication)?.updateInsideHomeStatus(isInside)
+                    Log.d("Geofence", "Post-add location check: distance=${dist[0]}, isInside=$isInside")
+                } else {
+                    Log.w("Geofence", "Post-add location check: current location null")
+                }
+            }.addOnFailureListener { Log.w("Geofence", "Post-add location check failed: ${it.message}") }
             Toast.makeText(context, "Home location updated!", Toast.LENGTH_SHORT).show()
         }
-        addOnFailureListener {
-            Log.e("Geofence", "Failed to add new geofence: ${it.message}")
-            Toast.makeText(context, "Error updating home location.", Toast.LENGTH_SHORT).show()
-        }
+
     }
 }
+
+
+
