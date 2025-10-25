@@ -277,26 +277,30 @@ class TimerService : Service() {
                                                 lastBreakTriggerAt = nowTs
                                                 val breakSeconds = prefs.getInt("break_interval", 300)
 
-                                                // Try launching the activity directly (may fail on some OEMs / background restrictions)
+                                                // --- Start camera activity directly to monitor the break (useful when service triggers the break) ---
                                                 try {
-                                                    val promptIntent = Intent(applicationContext, BreakPromptActivity::class.java).apply {
+                                                    val cameraIntent = Intent(applicationContext, CameraCaptureActivity::class.java).apply {
                                                         putExtra("break_seconds", breakSeconds)
+                                                        // service -> activity requires NEW_TASK flag
                                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                                                     }
-                                                    startActivity(promptIntent)
-                                                    Log.d("TimerService", "Launched BreakPromptActivity (direct).")
+                                                    startActivity(cameraIntent)
+                                                    Log.d("TimerService", "Launched CameraCaptureActivity (direct).")
                                                 } catch (t: Throwable) {
                                                     Log.w("TimerService", "Direct start failed, sending fullscreen notification: ${t.message}")
 
-                                                    val promptIntent = Intent(applicationContext, BreakPromptActivity::class.java).apply {
+                                                    // Build an intent and back stack so tapping notification opens CameraCaptureActivity properly
+                                                    val cameraIntent = Intent(applicationContext, CameraCaptureActivity::class.java).apply {
                                                         putExtra("break_seconds", breakSeconds)
                                                     }
 
+                                                    // Build a pending intent with proper flags using TaskStackBuilder so "Up" navigation works
                                                     val pendingIntent = TaskStackBuilder.create(applicationContext).run {
-                                                        addNextIntentWithParentStack(promptIntent)
+                                                        addNextIntentWithParentStack(cameraIntent)
                                                         getPendingIntent(0, pendingIntentFlags())
                                                     }
 
+                                                    // Create and post a high-priority full-screen notification as fallback
                                                     val notif = NotificationCompat.Builder(applicationContext, NOTIF_CHANNEL)
                                                         .setSmallIcon(R.mipmap.ic_launcher)
                                                         .setContentTitle("Time for a short break")
@@ -310,6 +314,7 @@ class TimerService : Service() {
 
                                                     NotificationManagerCompat.from(applicationContext).notify(BREAK_NOTIF_ID, notif)
                                                 }
+
                                             } else {
                                                 Log.d("TimerService", "Break recently triggered; skipping retrigger.")
                                             }

@@ -108,6 +108,8 @@ fun MainNavigation() {
     var showSplashScreen by remember { mutableStateOf(true) }
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE) }
+
+
     var onboardingComplete by remember { mutableStateOf(prefs.getBoolean("onboarding_complete", false)) }
 
     if (showSplashScreen) {
@@ -273,6 +275,57 @@ fun HomeScreenWithNavigation() {
     val scope = rememberCoroutineScope()
     val app = context.applicationContext as StillApplication
     val isInsideHome by app.isInsideHome.collectAsState()
+// --- breaks today state & broadcast receiver ---
+    val sdfForBreakKey = remember { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US) }
+    val todayKey = remember { "break_count_${sdfForBreakKey.format(java.util.Date())}" }
+    val breaksTodayState = remember { mutableStateOf(0) }
+
+// load initial value once
+    LaunchedEffect(Unit) {
+        try {
+            val cur = context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE).getInt(todayKey, 0)
+            breaksTodayState.value = cur
+            Log.d("HomeScreenWithNavigation", "breaksToday initial=$cur")
+        } catch (t: Throwable) {
+            Log.w("HomeScreenWithNavigation", "Failed to read breaksToday prefs: ${t.message}")
+        }
+    }
+
+// update when break completes (CameraCaptureActivity writes the pref and broadcasts ACTION_BREAK_COMPLETED)
+    DisposableEffect(Unit) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                try {
+                    val newVal = context.getSharedPreferences("still_prefs", Context.MODE_PRIVATE).getInt(todayKey, 0)
+                    breaksTodayState.value = newVal
+                    Log.d("HomeScreenWithNavigation", "Received ACTION_BREAK_COMPLETED -> breaksToday=$newVal")
+                } catch (t: Throwable) {
+                    Log.w("HomeScreenWithNavigation", "breakReceiver error: ${t.message}")
+                }
+            }
+        }
+        val filter = android.content.IntentFilter("com.nitish.still.ACTION_BREAK_COMPLETED")
+
+        try {
+            // On Android 13+ the registerReceiver overload requires an exported flag.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, filter)
+            }
+        } catch (t: Throwable) {
+            Log.w("HomeScreenWithNavigation", "registerReceiver failed: ${t.message}")
+        }
+
+        onDispose {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (t: Throwable) {
+                Log.w("HomeScreenWithNavigation", "unregisterReceiver failed: ${t.message}")
+            }
+        }
+    }
+
 
     // UI state for usage values
     var totalDailyUsage by remember { mutableStateOf(0L) }
@@ -494,7 +547,8 @@ fun HomeScreenWithNavigation() {
                         totalDailyUsage = totalDailyUsage,
                         weeklyUsage = weeklyUsage,
                         top5Apps = top5Apps,
-                        continuousMs = continuousMs
+                        continuousMs = continuousMs,
+                        breaksToday = breaksTodayState.value
                     )
                 } else {
                     OutsideZoneScreen()
@@ -520,11 +574,12 @@ fun InsideZoneScreen(
     totalDailyUsage: Long,
     weeklyUsage: List<DailyUsage>,
     top5Apps: List<WeeklyAppUsage>,
-    continuousMs: Long
+    continuousMs: Long,
+    breaksToday: Int
 ) {
     // debug: log whenever this composable recomposes because continuousMs changed
     LaunchedEffect(continuousMs) {
-        Log.d("InsideZoneUI", "recompose: continuousMs=$continuousMs totalDailyUsage=$totalDailyUsage")
+        Log.d("InsideZoneUI", "recompose: continuousMs=$continuousMs totalDailyUsage=$totalDailyUsage breaksToday=$breaksToday")
     }
 
     // compute formatted total daily time
@@ -557,6 +612,8 @@ fun InsideZoneScreen(
             Column {
                 Text("Screen Time Today", style = MaterialTheme.typography.headlineMedium)
                 Text(formattedTime, style = MaterialTheme.typography.displayLarge, fontSize = 40.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Breaks today: $breaksToday", style = MaterialTheme.typography.bodyMedium)
             }
             WeeklyTrendChart(weeklyUsage = weeklyUsage)
         }
@@ -566,34 +623,28 @@ fun InsideZoneScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ===== replace the previous "Show continuous session and time to next break" Column with this block =====
+        // continuous session / time to next break
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // derive values *right here* so recomposition will recalc them on each pass
             val contSec = TimeUnit.MILLISECONDS.toSeconds(continuousMs)
-            // safe read of prefs (cheap) directly here
-            val ctx = LocalContext.current
-            val prefs = ctx.getSharedPreferences("still_prefs", Context.MODE_PRIVATE)
-            val workMinutes = prefs.getInt("work_interval", 60) // minutes
-            val workIntervalMs = TimeUnit.MINUTES.toMillis(workMinutes.toLong())
-            val remainingMs = (workIntervalMs - continuousMs).coerceAtLeast(0L)
-            val remainingSeconds = TimeUnit.MILLISECONDS.toSeconds(remainingMs)
+            val workMinutesLocal = prefs.getInt("work_interval", 60) // minutes
+            val workIntervalMsLocal = TimeUnit.MINUTES.toMillis(workMinutesLocal.toLong())
+            val remainingMsLocal = (workIntervalMsLocal - continuousMs).coerceAtLeast(0L)
+            val remainingSecondsLocal = TimeUnit.MILLISECONDS.toSeconds(remainingMsLocal)
 
-            // quick log right before rendering to confirm values used by UI
             Log.d(
                 "InsideZoneUI",
-                "renderingTexts: continuousMs=$continuousMs contSec=${contSec}s remainingSeconds=${remainingSeconds}s workMinutes=$workMinutes"
+                "renderingTexts: continuousMs=$continuousMs contSec=${contSec}s remainingSeconds=${remainingSecondsLocal}s workMinutes=$workMinutesLocal"
             )
 
             Text("Current continuous session: ${contSec}s", style = MaterialTheme.typography.bodyLarge)
             Spacer(modifier = Modifier.height(4.dp))
-            Text("Time until break: ${remainingSeconds}s", style = MaterialTheme.typography.headlineSmall)
+            Text("Time until break: ${remainingSecondsLocal}s", style = MaterialTheme.typography.headlineSmall)
         }
-
 
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -605,6 +656,7 @@ fun InsideZoneScreen(
         }
     }
 }
+
 
 
 
