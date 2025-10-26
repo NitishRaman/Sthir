@@ -49,11 +49,16 @@ class TimerService : Service() {
     private lateinit var prefs: SharedPreferences
     private var isInsideHome = false
 
+    // pause flag controlled from UI (persisted in prefs)
+    private var isPaused = false
+
+
     companion object {
         const val LABEL_UNLABELED = "Unlabeled"
         const val LABEL_IMPORTANT = "Important"
         const val LABEL_LEISURE = "Leisure"
         private const val NOTIF_CHANNEL = "still_channel"
+        private const val BREAK_CHANNEL = "still_breaks"
         private const val BREAK_NOTIF_ID = 1001
     }
     private var lastBreakTriggerAt = 0L
@@ -75,6 +80,7 @@ class TimerService : Service() {
         super.onCreate()
         prefs = getSharedPreferences("still_prefs", Context.MODE_PRIVATE)
         Log.d("TimerService", "onCreate() - PID=${android.os.Process.myPid()} UID=${android.os.Process.myUid()}")
+        isPaused = prefs.getBoolean("paused_tracking", false)
         try {
             val workInterval = prefs.getInt("work_interval", 60)
             val breakInterval = prefs.getInt("break_interval", 300)
@@ -106,16 +112,32 @@ class TimerService : Service() {
         Log.d("TimerService", "Service started")
         Log.d("TimerService", "onStartCommand: intent=$intent flags=$flags startId=$startId")
 
-        intent?.let {
-            if (it.hasExtra(EXTRA_IS_INSIDE_HOME)) {
-                isInsideHome = it.getBooleanExtra(EXTRA_IS_INSIDE_HOME, false)
+        intent?.let { itIntent ->
+            // --- Handle pause/resume command (from UI) ---
+            if (itIntent.hasExtra("extra_paused")) {
+                try {
+                    isPaused = itIntent.getBooleanExtra("extra_paused", false)
+                    prefs.edit().putBoolean("paused_tracking", isPaused).apply()
+                    Log.d("TimerService", "onStartCommand: isPaused=$isPaused (updated from intent)")
+                    // Immediately reflect paused/resumed state in notification
+                    updateNotification(isInsideHome)
+                } catch (t: Throwable) {
+                    Log.w("TimerService", "Failed to process extra_paused: ${t.message}")
+                }
+            }
+
+            // --- Existing home-status logic ---
+            if (itIntent.hasExtra(EXTRA_IS_INSIDE_HOME)) {
+                isInsideHome = itIntent.getBooleanExtra(EXTRA_IS_INSIDE_HOME, false)
                 checkInitialHomeStatus()
                 Log.d("TimerService", "onStartCommand: isInsideHome = $isInsideHome")
             }
         }
 
+
         createNotificationChannel()
         updateNotification(isInsideHome)
+        ensureGeofenceRegisteredIfNeeded()
 
 
         serviceJob.cancel()
@@ -138,7 +160,11 @@ class TimerService : Service() {
         )
 
         val title = if (isInsideHome) "You are at home" else "You are outside home"
-        val text = if (isInsideHome) "Still is active and tracking screen time." else "Still is paused."
+        val text = when {
+            isPaused -> "Paused — tracking temporarily stopped."
+            isInsideHome -> "Still is active and tracking screen time."
+            else -> "Still is paused."
+        }
 
         val notification = NotificationCompat.Builder(this, NOTIF_CHANNEL)
             .setContentTitle(title)
@@ -165,7 +191,7 @@ class TimerService : Service() {
 
             while (true) {
                 Log.v("TimerService", "tick: shouldTrack=$shouldTrack isInsideHome=$isInsideHome continuousMs=$continuousUsageMs lastBreakAt=$lastBreakTriggerAt lastFg=$lastForegroundPackage")
-                shouldTrack = isInsideHome
+                shouldTrack = isInsideHome && !isPaused
 
                 // default emit value (will be overridden inside try when resolvedForeground is known)
                 var emitMs = continuousUsageMs
@@ -277,42 +303,157 @@ class TimerService : Service() {
                                                 lastBreakTriggerAt = nowTs
                                                 val breakSeconds = prefs.getInt("break_interval", 300)
 
-                                                // --- Start camera activity directly to monitor the break (useful when service triggers the break) ---
+                                                // --- Best-effort: attempt to pause media playback (may pause YouTube/music) ---
+                                                try {
+                                                    val down = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+                                                    val up = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+                                                    Intent(Intent.ACTION_MEDIA_BUTTON).also { i ->
+                                                        i.putExtra(Intent.EXTRA_KEY_EVENT, down)
+                                                        sendBroadcast(i)
+                                                    }
+                                                    Intent(Intent.ACTION_MEDIA_BUTTON).also { i ->
+                                                        i.putExtra(Intent.EXTRA_KEY_EVENT, up)
+                                                        sendBroadcast(i)
+                                                    }
+                                                    Log.d("TimerService", "Sent media pause key events (best-effort).")
+                                                } catch (t: Throwable) {
+                                                    Log.w("TimerService", "Media pause broadcast failed: ${t.message}")
+                                                }
+
+                                                // 1) Try direct activity launch (works when system allows)
+                                                // 1) Try direct activity launch (works when system allows)
+                                                var attemptedDirect = false
+                                                var wakeLock: PowerManager.WakeLock? = null
                                                 try {
                                                     val cameraIntent = Intent(applicationContext, CameraCaptureActivity::class.java).apply {
                                                         putExtra("break_seconds", breakSeconds)
-                                                        // service -> activity requires NEW_TASK flag
                                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                                                     }
-                                                    startActivity(cameraIntent)
-                                                    Log.d("TimerService", "Launched CameraCaptureActivity (direct).")
-                                                } catch (t: Throwable) {
-                                                    Log.w("TimerService", "Direct start failed, sending fullscreen notification: ${t.message}")
 
-                                                    // Build an intent and back stack so tapping notification opens CameraCaptureActivity properly
+                                                    // --- Acquire short wake lock to wake screen before starting activity ---
+                                                    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                                                    wakeLock = pm.newWakeLock(
+                                                        PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                                                        "Still:BreakWake"
+                                                    )
+                                                    wakeLock.acquire(2000L) // keep for 2s max
+
+                                                    startActivity(cameraIntent)
+                                                    attemptedDirect = true
+                                                    Log.d("TimerService", "Attempted direct CameraCaptureActivity start (with wake lock).")
+                                                } catch (t: Throwable) {
+                                                    Log.w("TimerService", "Direct start failed: ${t.message}")
+                                                } finally {
+                                                    try {
+                                                        wakeLock?.release()
+                                                        Log.v("TimerService", "WakeLock released after direct start attempt.")
+                                                    } catch (_: Throwable) {}
+                                                }
+
+
+                                                // 2) Always post a high-priority full-screen notification fallback so the user is prompted.
+                                                try {
                                                     val cameraIntent = Intent(applicationContext, CameraCaptureActivity::class.java).apply {
                                                         putExtra("break_seconds", breakSeconds)
                                                     }
 
-                                                    // Build a pending intent with proper flags using TaskStackBuilder so "Up" navigation works
-                                                    val pendingIntent = TaskStackBuilder.create(applicationContext).run {
+                                                    // Unique request codes for pending intents
+                                                    val contentReq = (System.currentTimeMillis() and 0xFFFFFF).toInt()
+                                                    val fullReq = contentReq + 1
+
+                                                    // Content pending (back stack)
+                                                    val contentPending = TaskStackBuilder.create(applicationContext).run {
                                                         addNextIntentWithParentStack(cameraIntent)
-                                                        getPendingIntent(0, pendingIntentFlags())
+                                                        getPendingIntent(contentReq, pendingIntentFlags())
                                                     }
 
-                                                    // Create and post a high-priority full-screen notification as fallback
-                                                    val notif = NotificationCompat.Builder(applicationContext, NOTIF_CHANNEL)
+                                                    // Full-screen pending (NEW_TASK so system can surface it)
+                                                    val fsIntent = Intent(applicationContext, CameraCaptureActivity::class.java).apply {
+                                                        putExtra("break_seconds", breakSeconds)
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                                    }
+                                                    val fullScreenPending = PendingIntent.getActivity(
+                                                        applicationContext,
+                                                        fullReq,
+                                                        fsIntent,
+                                                        pendingIntentFlags()
+                                                    )
+
+                                                    // Cancel any previous break notifications to avoid stacking duplicates
+                                                    val notifManager = NotificationManagerCompat.from(applicationContext)
+                                                    notifManager.cancel(BREAK_NOTIF_ID)
+
+                                                    // Use break channel we created earlier if available
+                                                    val channelForBreak = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) BREAK_CHANNEL else NOTIF_CHANNEL
+
+                                                    // Build high-priority break notification
+                                                    val notif = NotificationCompat.Builder(applicationContext, channelForBreak)
                                                         .setSmallIcon(R.mipmap.ic_launcher)
                                                         .setContentTitle("Time for a short break")
-                                                        .setContentText("You completed your work interval. Tap to start your break.")
+                                                        .setContentText("You reached your work interval. Tap to start a short break.")
                                                         .setPriority(NotificationCompat.PRIORITY_HIGH)
                                                         .setCategory(NotificationCompat.CATEGORY_ALARM)
                                                         .setAutoCancel(true)
-                                                        .setContentIntent(pendingIntent)
-                                                        .setFullScreenIntent(pendingIntent, true)
+                                                        .setContentIntent(contentPending)
+                                                        .setFullScreenIntent(fullScreenPending, true)
+                                                        .setDefaults(NotificationCompat.DEFAULT_ALL)
                                                         .build()
 
-                                                    NotificationManagerCompat.from(applicationContext).notify(BREAK_NOTIF_ID, notif)
+                                                    // Use a semi-unique id per post to avoid platform coalescing while still enabling cancellation
+                                                    val notifId = BREAK_NOTIF_ID + ((System.currentTimeMillis() / 1000L) % 1000).toInt()
+                                                    notifManager.notify(notifId, notif)
+
+                                                    Log.d("TimerService", "Posted improved full-screen break notification fallback (id=$notifId attemptedDirect=$attemptedDirect).")
+
+                                                    // --- Short retry attempt (helps on some OEMs / race conditions) ---
+                                                    serviceScope.launch {
+                                                        // small delay so the notification can be processed by system (tune if necessary)
+                                                        delay(400L)
+
+                                                        var retryWake: PowerManager.WakeLock? = null
+                                                        try {
+                                                            val cameraIntentRetry = Intent(applicationContext, CameraCaptureActivity::class.java).apply {
+                                                                putExtra("break_seconds", breakSeconds)
+                                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                                            }
+
+                                                            // Acquire short wake lock before retry (2 seconds max)
+                                                            val pm2 = getSystemService(Context.POWER_SERVICE) as PowerManager
+                                                            retryWake = pm2.newWakeLock(
+                                                                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                                                                "Still:BreakWakeRetry"
+                                                            )
+                                                            try {
+                                                                retryWake.acquire(2000L)
+                                                            } catch (e: Exception) {
+                                                                // on some platforms acquire may throw — ignore and proceed to startActivity
+                                                                Log.w("TimerService", "retryWake.acquire failed: ${e.message}")
+                                                            }
+
+                                                            startActivity(cameraIntentRetry)
+                                                            Log.d("TimerService", "Retried CameraCaptureActivity start after short delay (with wake lock).")
+                                                        } catch (t: Throwable) {
+                                                            Log.v("TimerService", "Retry start failed (non-fatal): ${t.message}")
+                                                        } finally {
+                                                            try {
+                                                                retryWake?.let {
+                                                                    if (it.isHeld) it.release()
+                                                                    Log.v("TimerService", "Retry WakeLock released.")
+                                                                }
+                                                            } catch (e: Throwable) {
+                                                                Log.w("TimerService", "Error releasing retryWake: ${e.message}")
+                                                            }
+                                                        }
+                                                    }
+
+
+                                                    // Debug: check notifications enabled
+                                                    if (!notifManager.areNotificationsEnabled()) {
+                                                        Log.w("TimerService", "Notifications are disabled for the app - break notification may be blocked by user.")
+                                                    }
+
+                                                } catch (t: Throwable) {
+                                                    Log.w("TimerService", "Failed to post full-screen notification: ${t.message}")
                                                 }
 
                                             } else {
@@ -322,6 +463,7 @@ class TimerService : Service() {
                                             // reset continuous counter after firing a break prompt (or skipping)
                                             continuousUsageMs = 0L
                                         }
+
 
                                     } else {
                                         continuousUsageMs = 0L
@@ -414,10 +556,52 @@ class TimerService : Service() {
         }
     }
 
+// --- add near other helper functions inside TimerService ---
+// 1-2 lines above: end of checkInitialHomeStatus() function or before createNotificationChannel()
 
+    private var geofenceRegistered = false
 
+    @SuppressLint("MissingPermission")
+    private fun ensureGeofenceRegisteredIfNeeded() {
+        try {
+            val homeLat = prefs.getString("home_latitude", "0.0")?.toDoubleOrNull() ?: 0.0
+            val homeLon = prefs.getString("home_longitude", "0.0")?.toDoubleOrNull() ?: 0.0
+            if (homeLat == 0.0 || homeLon == 0.0) {
+                Log.d("TimerService", "No home location set; skipping geofence registration")
+                return
+            }
 
+            // Avoid re-registering repeatedly
+            if (geofenceRegistered) {
+                Log.d("TimerService", "Geofence already registered; skipping")
+                return
+            }
 
+            val geofencingClient = com.google.android.gms.location.LocationServices.getGeofencingClient(applicationContext)
+            val geofence = com.google.android.gms.location.Geofence.Builder()
+                .setRequestId(GeofenceConstants.GEOFENCE_ID)
+                .setCircularRegion(homeLat, homeLon, GeofenceConstants.GEOFENCE_RADIUS_METERS)
+                .setExpirationDuration(com.google.android.gms.location.Geofence.NEVER_EXPIRE)
+                .setTransitionTypes(com.google.android.gms.location.Geofence.GEOFENCE_TRANSITION_ENTER or com.google.android.gms.location.Geofence.GEOFENCE_TRANSITION_EXIT)
+                .build()
+
+            val request = com.google.android.gms.location.GeofencingRequest.Builder()
+                .setInitialTrigger(com.google.android.gms.location.GeofencingRequest.INITIAL_TRIGGER_ENTER)
+                .addGeofence(geofence)
+                .build()
+
+            val pending = GeofenceConstants.createGeofencePendingIntent(applicationContext)
+
+            geofencingClient.addGeofences(request, pending).addOnSuccessListener {
+                geofenceRegistered = true
+                Log.i("TimerService", "Geofence registered from TimerService")
+            }.addOnFailureListener { e ->
+                Log.w("TimerService", "Failed to add geofence from TimerService: ${e.message}")
+            }
+        } catch (t: Throwable) {
+            Log.w("TimerService", "ensureGeofenceRegisteredIfNeeded error: ${t.message}")
+        }
+    }
 
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
@@ -451,6 +635,19 @@ class TimerService : Service() {
 
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(serviceChannel)
+
+            // Dedicated break channel (treated like alarm)
+            val breakChannel = NotificationChannel(
+                BREAK_CHANNEL,
+                "Break Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alarms and break alerts (high priority)"
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 250, 100, 250)
+            }
+            manager.createNotificationChannel(breakChannel)
         }
     }
 

@@ -75,9 +75,19 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 return
             }
 
-            // --- Fallback for manual testing: accept explicit boolean extra if provided ---
+            // Robust fallback: tolerate boolean, String("true"/"false"), or Int (1/0)
             if (intent.hasExtra(EXTRA_IS_INSIDE_HOME)) {
-                val isInsideManual = intent.getBooleanExtra(EXTRA_IS_INSIDE_HOME, false)
+                val raw = intent.extras?.get(EXTRA_IS_INSIDE_HOME)
+                val isInsideManual = when (raw) {
+                    is Boolean -> raw
+                    is String -> raw.equals("true", ignoreCase = true) || raw == "1"
+                    is Int -> raw != 0
+                    is Long -> raw != 0L
+                    else -> {
+                        Log.w(TAG, "Fallback: EXTRA_IS_INSIDE_HOME present but unrecognized type=${raw?.javaClass?.simpleName}")
+                        false
+                    }
+                }
                 Log.d(TAG, "Fallback: received manual EXTRA_IS_INSIDE_HOME=$isInsideManual (testing path)")
                 startTimerService(context, isInsideManual)
 
@@ -90,6 +100,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 }
                 return
             }
+
 
             // If we reach here, the intent wasn't a geofence event and had no manual test extra
             Log.w(TAG, "onReceive: Not a GeofencingEvent and no $EXTRA_IS_INSIDE_HOME extra found - ignoring intent")

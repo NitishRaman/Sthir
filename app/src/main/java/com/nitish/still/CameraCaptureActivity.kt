@@ -48,6 +48,56 @@ class CameraCaptureActivity : ComponentActivity() {
 
         const val EXTRA_RESULT_LABEL = "still_result_label"
         const val EXTRA_RESULT_CONFIDENCE = "still_result_confidence"
+        // playful / sarcastic messages shown when eyes open (friendly roast)
+        private val FUNNY_LINES = listOf(
+            "Hey sleepyhead — eyes open? That was a bold strategy.",
+            "Cheater detected. Blink once for honesty, twice for denial.",
+            "I see you. I also see the snack you’re pretending not to eat. 🍪",
+            "Nice try. You closing your eyes in spirit doesn't count.",
+            "Open eyes? Cute. Try closing them and pretending this never happened.",
+            "Welcome back to the land of the living. Please collect your focus badge.",
+            "If staring were a sport you'd be on the bench today.",
+            "Eyes open again — you’re single-handedly keeping the eyelid industry employed.",
+            "Blinking? That’s not a break, that’s a tactical retreat.",
+            "Look who’s awake — still not impressed though.",
+            "Pretend you were meditating. I won't tell. Mostly.",
+            "Ah, the classic ‘I’m relaxing’ face — we’ve all been there.",
+            "You opened your eyes. I assume you’ve completed the emotional arc.",
+            "I’d award you points for effort, but they’re imaginary and I spent them.",
+            "Eyes open — plot twist: the break owes you nothing.",
+            "Open? Fine. But no cookies — they’re in the cloud.",
+            "Did you just peek? Big sus. Very sus.",
+            "I was rooting for you. Also mildly disappointed.",
+            "You breaking the rules like a tiny rebel — so tiny.",
+            "Open eyes detected. Insert motivational gif here.",
+            "You looked. Shame. Also, adorable.",
+            "Pro tip: closing eyes increases coolness by at least 12%.",
+            "You popped back like a surprise ad. Unskippable.",
+            "You opened your eyes like it’s an optional feature. It is not.",
+            "A+ for showing up, F for following instructions.",
+            "If focus were a pizza, you just ordered delivery late.",
+            "Bold move opening your eyes — very dramatic.",
+            "If this were an exam, that peek would be a participation mark.",
+            "Eyes open. Mood: detective. Motivation: TBD.",
+            "Still here? Congrats, you’re a dedicated non-closer.",
+            "Cheater! Are your eyelids on vacation?",
+            "You opened your eyes. Hope you enjoy the guilt.",
+            "Nice try — the break called, it wants a do-over.",
+            "Blink and I’ll dock imaginary points.",
+            "You look surprised — probably because you failed a tiny test.",
+            "Opening eyes already? New personal best in impatience.",
+            "This isn’t hide-and-seek; you can’t hide from your eyelids.",
+            "You peeked. Shame, shame, and one eye-roll.",
+            "Your eyelids need a union. They refuse to close.",
+            "Congrats, you found the ‘not playing by the rules’ achievement.",
+            "Eyes open again? That’s dedication to procrastination.",
+            "If ignoring breaks were a career, you’d be CEO.",
+            "You opened your eyes like you paid for premium distractions.",
+            "Plot twist: cheating does not increase break effectiveness.",
+            "You look awake; success rate: 0. Try closing them next time."
+        )
+        // minimum ms between showing open-message repeats (coarse debounce)
+        private const val OPEN_MSG_DEBOUNCE_MS = 2500L
     }
 
     private lateinit var previewView: PreviewView
@@ -69,6 +119,10 @@ class CameraCaptureActivity : ComponentActivity() {
     // UI overlay
     private var countdownText: TextView? = null
     private var statusText: TextView? = null
+    // UI state for showing open-message once per open-event
+    @Volatile private var lastOpenMsgAt: Long = 0L
+    @Volatile private var lastOpenWasShown: Boolean = false
+
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -90,6 +144,7 @@ class CameraCaptureActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "onCreate() - breakSeconds=$breakSeconds intentExtras=${intent?.extras}")
 
         // read requested break seconds (caller supplies)
         breakSeconds = intent?.getIntExtra("break_seconds", 30) ?: 30
@@ -101,6 +156,8 @@ class CameraCaptureActivity : ComponentActivity() {
             )
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
+        // slightly dim the live preview so overlay messages & countdown feel primary
+        previewView.alpha = 0.88f
 
         // we will place previewView as the content view and add a small overlay for countdown/status
         val container = FrameLayout(this).apply {
@@ -127,21 +184,24 @@ class CameraCaptureActivity : ComponentActivity() {
         }
         container.addView(countdownText)
 
-        // status TextView (small, below countdown)
+        // status TextView (bigger, lower, with semi-opaque background so messages stand out)
         statusText = TextView(this).apply {
             text = "Closed ms: 0"
-            textSize = 14f
-            setPadding(12, 12, 12, 12)
+            textSize = 18f
+            setPadding(20, 14, 20, 14)
             setTextColor(android.graphics.Color.WHITE)
+            // semi-opaque rounded background to read on any preview
+            setBackgroundColor(android.graphics.Color.parseColor("#66000000"))
             setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
             val lp = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT
             )
-            lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            lp.topMargin = 90
+            lp.gravity = Gravity.CENTER_HORIZONTAL
+            lp.topMargin = 220 // push down so it's visible below countdown and preview
             layoutParams = lp
         }
+
         container.addView(statusText)
 
         setContentView(container)
@@ -174,6 +234,12 @@ class CameraCaptureActivity : ComponentActivity() {
         // start the countdown promptly so activity stays visible for full breakSeconds
         startBreakCountdown()
     }
+
+    override fun onResume() {
+        super.onResume()
+        Log.d(TAG, "onResume() - CameraCaptureActivity visible")
+    }
+
 
     override fun onDestroy() {
         super.onDestroy()
@@ -236,6 +302,19 @@ class CameraCaptureActivity : ComponentActivity() {
             putExtra(EXTRA_RESULT_CONFIDENCE, 1.0f)
         }
         setResult(Activity.RESULT_OK, out)
+
+// Launch JournalActivity so the user can add a short note
+        try {
+            val journalIntent = Intent(this, JournalActivity::class.java).apply {
+                putExtra("prefill", "")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            startActivity(journalIntent)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to start JournalActivity: ${t.message}")
+        }
+
+// finish this capture screen (JournalActivity will be foreground)
         finish()
     }
 
@@ -305,16 +384,60 @@ class CameraCaptureActivity : ComponentActivity() {
                                 if (isClosedLabel && confidence >= 0.85f) {
                                     closedAccumMs += delta
                                     Log.d(TAG, "Classifier reports CLOSED; delta=${delta} closedAccumMs=$closedAccumMs")
+
+                                    // reset open-message state so next open will show again
+                                    lastOpenWasShown = false
+
+                                    // update small status UI to show closed accumulation
+                                    runOnUiThread {
+                                        statusText?.text = "Closed ms: ${closedAccumMs}"
+                                        // ensure countdown is fully visible while eyes closed
+                                        statusText?.textSize = 18f
+                                        statusText?.alpha = 0.95f
+                                        countdownText?.alpha = 1.0f
+                                    }
                                 } else {
-                                    // if you want strict continuous requirement, uncomment the next line:
-                                    // closedAccumMs = 0L
+                                    // eyes likely open — show playful message once per open event (debounced)
+                                    val nowOpen = System.currentTimeMillis()
+                                    if (!lastOpenWasShown || nowOpen - lastOpenMsgAt >= OPEN_MSG_DEBOUNCE_MS) {
+                                        lastOpenMsgAt = nowOpen
+                                        lastOpenWasShown = true
+                                        val msg = FUNNY_LINES.random()
+                                        Log.d(TAG, "Showing open-message: $msg")
+                                        runOnUiThread {
+                                            statusText?.text = msg
+                                            // de-emphasize countdown while showing message
+                                            countdownText?.alpha = 0.6f
+                                        }
+                                    } else {
+                                        // avoid changing UI too often; keep countdown slightly dimmed
+                                        runOnUiThread {
+                                            val msg = FUNNY_LINES.random()
+                                            Log.d(TAG, "Showing open-message: $msg")
+                                            runOnUiThread {
+                                                // prominent overlay
+                                                statusText?.text = msg
+                                                statusText?.textSize = 20f
+                                                statusText?.setPadding(28, 16, 28, 16)
+                                                statusText?.alpha = 1.0f
+                                                countdownText?.alpha = 0.5f
+
+                                                // centered Toast so user can't miss it
+                                                val toast = Toast.makeText(this@CameraCaptureActivity, msg, Toast.LENGTH_SHORT)
+                                                val tv = toast.view?.findViewById<TextView>(android.R.id.message)
+                                                tv?.textSize = 16f
+                                                toast.setGravity(Gravity.CENTER, 0, 0)
+                                                toast.show()
+
+                                                Log.d(TAG, "Open-message UI updated (toast + overlay shown).")
+                                            }
+
+                                        }
+                                    }
+
                                     Log.v(TAG, "Classifier reports OPEN/uncertain; delta=${delta}")
                                 }
 
-                                // update small status UI
-                                runOnUiThread {
-                                    statusText?.text = "Closed ms: ${closedAccumMs}"
-                                }
 
                                 // do NOT finish here; countdown will decide when to finish.
                             } catch (t: Throwable) {

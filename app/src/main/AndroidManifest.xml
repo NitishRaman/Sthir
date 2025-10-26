@@ -17,7 +17,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission"/>
-
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Needed to restart/auto-start after device boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -170,13 +170,27 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />
-        <activity android:name=".CameraCaptureActivity"
-            android:exported="false"
-            android:screenOrientation="portrait" />
+        <!-- CameraCaptureActivity: system may start this via full-screen PendingIntent,
+     so exported must be true so the system can launch it. -->
+        <activity
+            android:name=".CameraCaptureActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Still" />
+
+        <!-- BreakPromptActivity: if you start this from a notification PendingIntent (or geofence)
+             make it exported so the platform can deliver the intent. -->
         <activity
             android:name=".BreakPromptActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Still" />
+
+        <!-- JournalActivity is only started by your app, so keep exported=false for safety -->
+        <activity
+            android:name=".JournalActivity"
             android:exported="false"
             android:theme="@style/Theme.Still" />
+
 
         <!-- Geofence receiver: keep exported=true so PendingIntent broadcasts reach it.
              (Your GeofenceBroadcastReceiver.kt will receive geofence transitions.) -->
@@ -204,5 +218,16 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <service
+            android:name=".MyNotificationListener"
+            android:exported="true"
+            android:label="Still - Notification listener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>
